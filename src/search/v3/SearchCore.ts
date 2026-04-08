@@ -1,9 +1,15 @@
 import { LLM_TIMEOUT_MS } from "@/constants";
 import { logError, logInfo, logWarn } from "@/logger";
+import { readIndexMetadata } from "@/search/indexMetadata";
+import { createReranker } from "@/search/reranker";
+import type { IndexMetadata, IndexStats, SearchQuery, SearchResult } from "@/search/types";
+import { getSettings } from "@/settings/model";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { Document } from "@langchain/core/documents";
 import { App } from "obsidian";
 import { ChunkManager, getSharedChunkManager } from "./chunks";
 import { FullTextEngine } from "./engines/FullTextEngine";
+import { FilterRetriever } from "./FilterRetriever";
 import { NoteIdRank, SearchOptions } from "./interfaces";
 import { ExpandedQuery, QueryExpander } from "./QueryExpander";
 import { GrepScanner } from "./scanners/GrepScanner";
@@ -26,6 +32,29 @@ export interface RetrieveResult {
 }
 
 /**
+ * Combine semantic and lexical ranked lists using reciprocal rank fusion.
+ */
+export function computeFusionScore(
+  semanticResults: Array<{ id: string; score: number }>,
+  lexicalResults: Array<{ id: string; score: number }>,
+  k = 60
+): Array<{ id: string; fusionScore: number }> {
+  const fusedScores = new Map<string, number>();
+
+  semanticResults.forEach((result, index) => {
+    fusedScores.set(result.id, (fusedScores.get(result.id) ?? 0) + 1 / (k + index + 1));
+  });
+
+  lexicalResults.forEach((result, index) => {
+    fusedScores.set(result.id, (fusedScores.get(result.id) ?? 0) + 1 / (k + index + 1));
+  });
+
+  return Array.from(fusedScores.entries())
+    .map(([id, fusionScore]) => ({ id, fusionScore }))
+    .sort((left, right) => right.fusionScore - left.fusionScore);
+}
+
+/**
  * Core search engine that orchestrates the multi-stage retrieval pipeline
  * Updated to support unified chunking architecture
  */
@@ -37,6 +66,7 @@ export class SearchCore {
   private graphBoostCalculator: GraphBoostCalculator;
   private scoreNormalizer: ScoreNormalizer;
   private chunkManager: ChunkManager;
+  private indexMetadata: IndexMetadata | null = null;
 
   constructor(
     private app: App,
@@ -62,6 +92,120 @@ export class SearchCore {
       clipMin: 0.02,
       clipMax: 0.98,
     });
+    void this.refreshIndexMetadata();
+  }
+
+  /**
+   * Search using the enhanced SearchQuery contract.
+   */
+  async search(query: SearchQuery): Promise<SearchResult[]> {
+    await this.refreshIndexMetadata();
+
+    if (this.isIndexStale()) {
+      logWarn("SearchCore: Search blocked because the index is stale");
+      return [];
+    }
+
+    if (query.timeRange) {
+      const filterRetriever = new FilterRetriever(this.app, {
+        salientTerms: [],
+        maxK: query.resultLimit,
+        returnAll: true,
+        timeRange: {
+          startTime: query.timeRange.start ?? Number.MIN_SAFE_INTEGER,
+          endTime: query.timeRange.end ?? Number.MAX_SAFE_INTEGER,
+        },
+      });
+      const filterDocuments = await filterRetriever.getRelevantDocuments(query.queryText);
+      return filterDocuments
+        .slice(0, query.resultLimit)
+        .map((doc) => this.documentToSearchResult(doc));
+    }
+
+    if (getSettings().enableSemanticSearchV3) {
+      const { MergedSemanticRetriever } = await import("./MergedSemanticRetriever");
+      const mergedRetriever = new MergedSemanticRetriever(this.app, {
+        maxK: query.resultLimit,
+        salientTerms: [],
+        textWeight: query.textWeight ?? getSettings().hybridSearchTextWeight,
+        returnAll: false,
+      });
+      const documents = await mergedRetriever.getRelevantDocuments(query.queryText);
+      const fusionScores = new Map(
+        computeFusionScore(
+          documents
+            .filter((doc) => (doc.metadata?.semanticScore ?? 0) > 0)
+            .sort(
+              (left, right) =>
+                (right.metadata?.semanticScore ?? 0) - (left.metadata?.semanticScore ?? 0)
+            )
+            .map((doc) => ({
+              id: this.getDocumentIdentifier(doc),
+              score: doc.metadata?.semanticScore ?? 0,
+            })),
+          documents
+            .filter((doc) => (doc.metadata?.lexicalScore ?? 0) > 0)
+            .sort(
+              (left, right) =>
+                (right.metadata?.lexicalScore ?? 0) - (left.metadata?.lexicalScore ?? 0)
+            )
+            .map((doc) => ({
+              id: this.getDocumentIdentifier(doc),
+              score: doc.metadata?.lexicalScore ?? 0,
+            }))
+        ).map((entry) => [entry.id, entry.fusionScore])
+      );
+
+      const fusedResults = documents
+        .map((doc) =>
+          this.documentToSearchResult(doc, fusionScores.get(this.getDocumentIdentifier(doc)))
+        )
+        .sort((left, right) => right.score - left.score)
+        .slice(0, query.resultLimit);
+
+      if (!getSettings().enableReranking) {
+        return fusedResults;
+      }
+
+      const reranker = createReranker(this.getChatModel);
+      return reranker.rerank(query.queryText, fusedResults, query.resultLimit);
+    }
+
+    const retrieveResult = await this.retrieve(query.queryText, {
+      maxResults: query.resultLimit,
+      enableLexicalBoosts: getSettings().enableLexicalBoosts,
+    });
+
+    const results = await Promise.all(
+      retrieveResult.results.map((result) => this.noteRankToSearchResult(result))
+    );
+
+    if (!getSettings().enableReranking) {
+      return results;
+    }
+
+    const reranker = createReranker(this.getChatModel);
+    return reranker.rerank(query.queryText, results, query.resultLimit);
+  }
+
+  /**
+   * Return whether the persisted index is stale.
+   */
+  isIndexStale(): boolean {
+    return Boolean(this.indexMetadata?.stale);
+  }
+
+  /**
+   * Return persisted index statistics.
+   */
+  getIndexStats(): IndexStats {
+    return {
+      documentCount: Object.keys(this.indexMetadata?.documentHashes ?? {}).length,
+      chunkCount: 0,
+      lastFullIndexAt: this.indexMetadata?.lastFullIndexAt,
+      embeddingModel: this.indexMetadata?.embeddingModel,
+      stale: Boolean(this.indexMetadata?.stale),
+    };
   }
 
   /**
@@ -268,6 +412,90 @@ export class SearchCore {
     this.fullTextEngine.clear();
     this.queryExpander.clearCache();
     logInfo("SearchCore: Cleared all caches");
+  }
+
+  private async refreshIndexMetadata(): Promise<void> {
+    this.indexMetadata = await readIndexMetadata(this.app, getSettings().enableIndexSync);
+  }
+
+  private async noteRankToSearchResult(result: NoteIdRank): Promise<SearchResult> {
+    const documentPath = result.id.includes("#") ? result.id.split("#")[0] : result.id;
+    const file = this.app.vault.getAbstractFileByPath(documentPath);
+    const fileCache = file ? this.app.metadataCache.getFileCache(file as any) : undefined;
+    const chunkContent = result.id.includes("#")
+      ? await this.chunkManager.getChunkText(result.id)
+      : "";
+
+    return {
+      chunk: {
+        id: result.id,
+        documentPath,
+        content: chunkContent,
+        headingPath: [],
+        startLine: 0,
+        endLine: 0,
+        metadata: {
+          documentTags: fileCache?.tags?.map((tag: { tag: string }) => tag.tag) ?? [],
+          documentModifiedAt: (file as any)?.stat?.mtime ?? 0,
+          documentTitleDate: undefined,
+          documentWordCount: chunkContent.split(/\s+/).filter(Boolean).length,
+          sectionHeadings: [],
+        },
+      },
+      score: result.score,
+      documentPath,
+      sectionPreview: chunkContent.slice(0, 200),
+      scoreBreakdown: {
+        semanticScore: result.score,
+        lexicalScore: 0,
+        fusionScore: 0,
+      },
+    };
+  }
+
+  private getDocumentIdentifier(doc: Document): string {
+    return (
+      doc.metadata?.chunkId ?? doc.metadata?.path ?? doc.metadata?.documentPath ?? doc.pageContent
+    );
+  }
+
+  private documentToSearchResult(doc: Document, fusionScore?: number): SearchResult {
+    const metadata = doc.metadata ?? {};
+    const documentPath = metadata.path ?? metadata.documentPath ?? "";
+    const headingPath = Array.isArray(metadata.headingPath)
+      ? metadata.headingPath
+      : metadata.heading
+        ? [metadata.heading]
+        : [];
+    const score = fusionScore ?? metadata.rerank_score ?? metadata.score ?? 0;
+
+    return {
+      chunk: {
+        id: metadata.chunkId ?? documentPath,
+        documentPath,
+        content: doc.pageContent,
+        headingPath,
+        startLine: typeof metadata.startLine === "number" ? metadata.startLine : 0,
+        endLine: typeof metadata.endLine === "number" ? metadata.endLine : 0,
+        metadata: {
+          documentTags: metadata.documentTags ?? metadata.tags ?? [],
+          documentModifiedAt: metadata.mtime ?? 0,
+          documentTitleDate: metadata.documentTitleDate,
+          documentWordCount:
+            metadata.documentWordCount ?? doc.pageContent.split(/\s+/).filter(Boolean).length,
+          sectionHeadings: metadata.documentHeadings ?? headingPath,
+        },
+      },
+      score,
+      documentPath,
+      sectionPreview: doc.pageContent.slice(0, 200),
+      scoreBreakdown: {
+        semanticScore: metadata.semanticScore ?? 0,
+        lexicalScore: metadata.lexicalScore ?? 0,
+        fusionScore: fusionScore ?? metadata.fusionScore ?? 0,
+        rerankScore: metadata.rerankScore ?? metadata.rerank_score,
+      },
+    };
   }
 
   /**

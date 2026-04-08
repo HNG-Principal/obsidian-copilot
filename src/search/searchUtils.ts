@@ -4,6 +4,7 @@ import { getSettings } from "@/settings/model";
 import { logFileManager } from "@/logFileManager";
 import { getTagsFromNote, stripHash } from "@/utils";
 import { Embeddings } from "@langchain/core/embeddings";
+import { MD5 } from "crypto-js";
 import { App, TFile } from "obsidian";
 
 export interface PatternCategory {
@@ -11,6 +12,116 @@ export interface PatternCategory {
   extensionPatterns?: string[];
   folderPatterns?: string[];
   notePatterns?: string[];
+}
+
+/**
+ * Compute a deterministic MD5 hash for document content.
+ *
+ * @param content - Raw document content.
+ * @returns Lowercase MD5 hex digest.
+ */
+export function computeContentHash(content: string): string {
+  return MD5(content).toString();
+}
+
+/**
+ * Parse a date embedded in a file name.
+ *
+ * Supported patterns: `YYYY-MM-DD`, `YYYY.MM.DD`, `YYYYMMDD`.
+ *
+ * @param filename - File name or path.
+ * @returns UTC timestamp for the detected date, or undefined.
+ */
+export function parseTitleDate(filename: string): number | undefined {
+  const basename = filename.split("/").pop() ?? filename;
+  const stem = basename.replace(/\.[^.]+$/, "");
+  const match = stem.match(/(?:^|[^\d])(\d{4})([-.]?)(\d{2})\2(\d{2})(?:[^\d]|$)/);
+  if (!match) {
+    return undefined;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[3]);
+  const day = Number(match[4]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+
+  return parsed.getTime();
+}
+
+/**
+ * Extract normalized tags from markdown frontmatter and inline content.
+ *
+ * @param content - Raw markdown document.
+ * @returns Unique lowercase tags with leading hash.
+ */
+export function extractMarkdownTags(content: string): string[] {
+  const tags = new Set<string>();
+  const { body, frontmatter } = splitFrontmatter(content);
+
+  for (const tag of extractFrontmatterTags(frontmatter)) {
+    tags.add(normalizeTag(tag));
+  }
+
+  const inlineRegex = getInlineTagRegExp();
+  for (const match of body.matchAll(inlineRegex)) {
+    const rawTag = match[0].trim();
+    if (rawTag.length > 1) {
+      tags.add(normalizeTag(rawTag));
+    }
+  }
+
+  return Array.from(tags);
+}
+
+/**
+ * Extract markdown headings as plain text.
+ *
+ * @param content - Raw markdown document.
+ * @returns Ordered heading texts without markdown markers.
+ */
+export function extractMarkdownHeadings(content: string): string[] {
+  const { body } = splitFrontmatter(content);
+  const headings: string[] = [];
+  let inCodeFence = false;
+
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) {
+      continue;
+    }
+
+    const match = trimmed.match(/^(#{1,6})\s+(.+?)\s*#*$/);
+    if (match) {
+      headings.push(match[2].trim());
+    }
+  }
+
+  return headings;
+}
+
+/**
+ * Count human-readable words in markdown content.
+ *
+ * @param content - Raw markdown document.
+ * @returns Total word count after removing frontmatter.
+ */
+export function computeWordCount(content: string): number {
+  const { body } = splitFrontmatter(content);
+  const matches = body.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu);
+  return matches?.length ?? 0;
 }
 
 export async function getVectorLength(embeddingInstance: Embeddings | undefined): Promise<number> {
@@ -403,4 +514,75 @@ export function isInternalExcludedPath(filePath: string): boolean {
  */
 export function isInternalExcludedFile(file: TFile): boolean {
   return isInternalExcludedPath(file.path);
+}
+
+function splitFrontmatter(content: string): { frontmatter: string; body: string } {
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) {
+    return { frontmatter: "", body: content };
+  }
+
+  const lines = content.split(/\r?\n/);
+  if (lines[0].trim() !== "---") {
+    return { frontmatter: "", body: content };
+  }
+
+  for (let index = 1; index < lines.length; index++) {
+    if (lines[index].trim() === "---") {
+      return {
+        frontmatter: lines.slice(1, index).join("\n"),
+        body: lines.slice(index + 1).join("\n"),
+      };
+    }
+  }
+
+  return { frontmatter: "", body: content };
+}
+
+function extractFrontmatterTags(frontmatter: string): string[] {
+  if (!frontmatter) {
+    return [];
+  }
+
+  const tags: string[] = [];
+  const bracketMatch = frontmatter.match(/^tags:\s*\[(.+?)\]\s*$/m);
+  if (bracketMatch) {
+    tags.push(
+      ...bracketMatch[1]
+        .split(",")
+        .map((tag) => stripWrappingQuotes(tag.trim()))
+        .filter(Boolean)
+    );
+  }
+
+  const scalarMatch = frontmatter.match(/^tags:\s*(.+?)\s*$/m);
+  if (scalarMatch && !bracketMatch && !scalarMatch[1].startsWith("-")) {
+    tags.push(...scalarMatch[1].split(",").map((tag) => stripWrappingQuotes(tag.trim())));
+  }
+
+  const listMatch = frontmatter.match(/^tags:\s*$([\s\S]*?)(?:^\S|(?![\s\S]))/m);
+  if (listMatch) {
+    const listLines = listMatch[1]
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("- "));
+    tags.push(...listLines.map((line) => stripWrappingQuotes(line.slice(2).trim())));
+  }
+
+  return tags.filter(Boolean);
+}
+
+function stripWrappingQuotes(value: string): string {
+  return value.replace(/^['"]|['"]$/g, "");
+}
+
+function normalizeTag(tag: string): string {
+  return `#${stripHash(tag).toLowerCase()}`;
+}
+
+function getInlineTagRegExp(): RegExp {
+  try {
+    return /(?<!\w)#[\p{L}\p{N}_/-]+/gu;
+  } catch {
+    return /(^|\s)(#[a-zA-Z0-9_/-]+)/g;
+  }
 }
