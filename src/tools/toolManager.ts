@@ -10,6 +10,8 @@ export const getToolDescription = (tool: string): string => {
       return "Edit existing notes or create new notes.";
     case "@memory":
       return "Save information to user memory";
+    case "@wiki":
+      return "Capture content into Wiki Writer as a durable wiki page";
     default:
       return "";
   }
