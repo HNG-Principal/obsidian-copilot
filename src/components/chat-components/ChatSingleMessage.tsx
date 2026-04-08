@@ -34,8 +34,9 @@ import { parseReasoningBlock } from "@/LLMProviders/chainRunner/utils/AgentReaso
 import { processInlineCitations } from "@/LLMProviders/chainRunner/utils/citationUtils";
 import { ChatMessage } from "@/types/message";
 import { cleanMessageForCopy, extractYoutubeVideoId, insertIntoEditor } from "@/utils";
+import { getWikiWriterApi, hasWikiWriterApi } from "@/utils/wikiWriter";
 import { preprocessAIResponse } from "@/utils/markdownPreprocess";
-import { App, Component, MarkdownRenderer, MarkdownView, TFile } from "obsidian";
+import { App, Component, MarkdownRenderer, MarkdownView, Notice, TFile } from "obsidian";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useSettingsValue } from "@/settings/model";
 import {
@@ -893,6 +894,22 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
     insertIntoEditor(message.message, hasSelection);
   };
 
+  const handleSaveToWiki = async (): Promise<void> => {
+    const wikiWriterApi = getWikiWriterApi(app);
+    if (!wikiWriterApi) {
+      new Notice("Wiki Writer is not available in this vault.");
+      return;
+    }
+
+    try {
+      await wikiWriterApi.openSaveDialog(cleanMessageForCopy(message.message));
+    } catch {
+      new Notice("Failed to open Wiki Writer.");
+    }
+  };
+
+  const canSaveToWiki = message.sender !== USER_SENDER && hasWikiWriterApi(app);
+
   const renderMessageContent = () => {
     if (message.content) {
       return (
@@ -995,6 +1012,7 @@ const ChatSingleMessage: React.FC<ChatSingleMessageProps> = ({
                 onCopy={copyToClipboard}
                 isCopied={isCopied}
                 onInsertIntoEditor={handleInsertIntoEditor}
+                onSaveToWiki={canSaveToWiki ? () => void handleSaveToWiki() : undefined}
                 onRegenerate={onRegenerate}
                 onEdit={handleEdit}
                 onDelete={onDelete}
