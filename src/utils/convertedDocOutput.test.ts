@@ -1,5 +1,6 @@
 import { TFile, Vault } from "obsidian";
 import { saveConvertedDocOutput } from "./convertedDocOutput";
+import type { ConversionMetadata } from "@/tools/parsers/conversionTypes";
 
 jest.mock("@/utils", () => ({
   ensureFolderExists: jest.fn(),
@@ -40,7 +41,29 @@ function makeVault(adapter: ReturnType<typeof makeVaultAdapter>): Vault {
   return { adapter } as unknown as Vault;
 }
 
+function makeMetadata(overrides: Partial<ConversionMetadata> = {}): ConversionMetadata {
+  return {
+    sourceFilename: "report.pdf",
+    sourceFormat: "pdf",
+    conversionDate: "2025-01-02T03:04:05.000Z",
+    pageCount: 3,
+    wordCount: 42,
+    ocrUsed: false,
+    ...overrides,
+  };
+}
+
 describe("saveConvertedDocOutput", () => {
+  it("uses the default vault-root folder when outputFolder is undefined", async () => {
+    const adapter = makeVaultAdapter();
+    const vault = makeVault(adapter);
+    await saveConvertedDocOutput(makeTFile("docs/report.pdf"), "content", vault);
+    expect(adapter.write).toHaveBeenCalledWith(
+      "Converted Documents/report.md",
+      "<!-- source: docs/report.pdf -->\ncontent"
+    );
+  });
+
   it("no-ops when outputFolder is empty", async () => {
     const adapter = makeVaultAdapter();
     const vault = makeVault(adapter);
@@ -149,5 +172,86 @@ describe("saveConvertedDocOutput", () => {
     expect(path1).toBe("output/a__b__x.md");
     expect(path2).toBe("output/a_b__x.md");
     expect(path1).not.toBe(path2);
+  });
+
+  it("prepends conversion metadata frontmatter when provided", async () => {
+    const adapter = makeVaultAdapter();
+    const vault = makeVault(adapter);
+
+    await saveConvertedDocOutput(
+      makeTFile("docs/report.pdf"),
+      "parsed markdown",
+      vault,
+      "output",
+      makeMetadata()
+    );
+
+    expect(adapter.write).toHaveBeenCalledWith(
+      "output/report.md",
+      `---
+sourceFilename: "report.pdf"
+sourceFormat: "pdf"
+conversionDate: "2025-01-02T03:04:05.000Z"
+pageCount: 3
+wordCount: 42
+ocrUsed: false
+---
+
+<!-- source: docs/report.pdf -->
+parsed markdown`
+    );
+  });
+
+  it("omits pageCount frontmatter when metadata does not include it", async () => {
+    const adapter = makeVaultAdapter();
+    const vault = makeVault(adapter);
+
+    await saveConvertedDocOutput(
+      makeTFile("docs/report.pdf"),
+      "parsed markdown",
+      vault,
+      "output",
+      makeMetadata({ pageCount: undefined })
+    );
+
+    expect(adapter.write).toHaveBeenCalledWith(
+      "output/report.md",
+      `---
+sourceFilename: "report.pdf"
+sourceFormat: "pdf"
+conversionDate: "2025-01-02T03:04:05.000Z"
+wordCount: 42
+ocrUsed: false
+---
+
+<!-- source: docs/report.pdf -->
+parsed markdown`
+    );
+  });
+
+  it("treats frontmatter output from the same source as an in-place update", async () => {
+    const adapter = makeVaultAdapter();
+    adapter.files["output/report.md"] = `---
+sourceFilename: "report.pdf"
+sourceFormat: "pdf"
+conversionDate: "2025-01-02T03:04:05.000Z"
+pageCount: 3
+wordCount: 42
+ocrUsed: false
+---
+
+<!-- source: docs/report.pdf -->
+parsed markdown`;
+    const vault = makeVault(adapter);
+
+    await saveConvertedDocOutput(
+      makeTFile("docs/report.pdf"),
+      "parsed markdown",
+      vault,
+      "output",
+      makeMetadata()
+    );
+
+    expect(adapter.write).not.toHaveBeenCalled();
   });
 });

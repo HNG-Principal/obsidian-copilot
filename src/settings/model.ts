@@ -195,6 +195,12 @@ export interface CopilotSettings {
   defaultSystemPromptTitle: string;
   /** Token threshold for auto-compacting large context (range: 64k-1M tokens, default: 128000) */
   autoCompactThreshold: number;
+  /**
+   * Maximum file size allowed for local document conversion uploads (in MB)
+   * - Range: 1-200 MB
+   * - Default: 50 MB
+   */
+  maxFileSizeMB: number;
   /** Folder where converted document markdown files are saved */
   convertedDocOutputFolder: string;
 }
@@ -528,6 +534,14 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
       1000000,
       Math.max(64000, autoCompactThreshold)
     );
+  }
+
+  // Ensure maxFileSizeMB has a valid value (1-200 MB range)
+  const maxFileSizeMB = Number(settingsToSanitize.maxFileSizeMB);
+  if (isNaN(maxFileSizeMB)) {
+    sanitizedSettings.maxFileSizeMB = DEFAULT_SETTINGS.maxFileSizeMB;
+  } else {
+    sanitizedSettings.maxFileSizeMB = Math.min(200, Math.max(1, maxFileSizeMB));
   }
 
   // Ensure quickCommandIncludeNoteContext has a default value

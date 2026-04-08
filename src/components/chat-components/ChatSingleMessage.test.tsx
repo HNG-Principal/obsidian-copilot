@@ -1,5 +1,5 @@
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ChatSingleMessage, {
   normalizeFootnoteRendering,
 } from "@/components/chat-components/ChatSingleMessage";
@@ -48,6 +48,9 @@ jest.mock("obsidian", () => {
     MarkdownView: class {},
     TFile: class {},
     App: class {},
+    Notice: class {
+      constructor(_message: string) {}
+    },
     Platform: {
       isMobile: false,
     },
@@ -120,12 +123,20 @@ describe("ChatSingleMessage", () => {
     isVisible: true,
   };
 
-  const createAppStub = (): App =>
+  const createAppStub = (wikiWriterApi?: { openSaveDialog: jest.Mock }): App =>
     ({
       workspace: {
         getActiveFile: jest.fn(() => null),
         getMostRecentLeaf: jest.fn(() => null),
         getLeaf: jest.fn(() => null),
+      },
+      plugins: {
+        getPlugin: jest.fn((pluginId: string) => {
+          if (pluginId === "wiki-writer" && wikiWriterApi) {
+            return { api: wikiWriterApi };
+          }
+          return null;
+        }),
       },
       metadataCache: {
         getFirstLinkpathDest: jest.fn(() => null),
@@ -175,5 +186,32 @@ describe("ChatSingleMessage", () => {
     expect(messageSegment?.querySelector(".footnote-backref")).toBeNull();
     expect(messageSegment?.querySelector(".content-hr")).not.toBeNull();
     expect(messageSegment?.querySelector('a[href="#fn-2"]')?.textContent).toBe("2");
+  });
+
+  it("shows a Save to Wiki action and forwards cleaned assistant content", async () => {
+    const openSaveDialog = jest.fn(async () => null);
+    const wikiMessage: ChatMessage = {
+      ...baseMessage,
+      message: "<think>Planning</think>\n\nAnswer body",
+    };
+
+    render(
+      <TooltipProvider>
+        <ChatSingleMessage
+          message={wikiMessage}
+          app={createAppStub({ openSaveDialog })}
+          isStreaming={false}
+          onDelete={() => {}}
+        />
+      </TooltipProvider>
+    );
+
+    await waitFor(() => expect(renderMarkdownMock).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByTitle("Save to Wiki"));
+
+    await waitFor(() => {
+      expect(openSaveDialog).toHaveBeenCalledWith("Answer body");
+    });
   });
 });
