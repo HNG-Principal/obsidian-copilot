@@ -8,7 +8,9 @@
 
 ### ConversionRequest
 
-Represents a user's request to convert a file to markdown.
+> **Note**: This is a **type-only** interface for documentation and type-checking purposes. It is _not_ instantiated as a runtime object. The `FileParserManager` adapter layer destructures its fields from the `TFile`, settings, and MIME detection \u2014 no code creates a `ConversionRequest` instance directly.
+
+Represents the parameters available for a conversion operation.
 
 | Field        | Type                | Description                                  |
 | ------------ | ------------------- | -------------------------------------------- |

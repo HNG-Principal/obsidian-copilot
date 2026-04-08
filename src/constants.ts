@@ -1000,6 +1000,7 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   userSystemPromptsFolder: DEFAULT_SYSTEM_PROMPTS_FOLDER,
   defaultSystemPromptTitle: "",
   autoCompactThreshold: 128000,
+  maxFileSizeMB: 50,
   convertedDocOutputFolder: DEFAULT_CONVERTED_DOC_OUTPUT_FOLDER,
 };
 

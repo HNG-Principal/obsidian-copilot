@@ -17,7 +17,7 @@ Self-hosted document conversion service that converts PDF, EPUB, DOCX, PPTX, XLS
 **Project Type**: Obsidian plugin (single-bundle, esbuild)
 **Performance Goals**: Conversion within 30 seconds for documents up to 100 pages (SC-001), table accuracy ≥90% (SC-002)
 **Constraints**: Offline-capable (no third-party services except user's own LLM for OCR fallback via vision API), single-bundle plugin (libraries must be bundleable or WASM-compatible)
-**Scale/Scope**: 5+ file formats at launch, ~8 new source files, 3 new parser implementations
+**Scale/Scope**: 5+ file formats at launch, ~7 new source files, 5 format parsers + 1 OCR fallback
 
 ## Constitution Check
 
@@ -67,7 +67,9 @@ src/
 │   │   ├── EpubParser.ts             # NEW — EPUB → markdown with chapter headings
 │   │   ├── EpubParser.test.ts        # NEW — unit tests
 │   │   ├── OcrFallbackParser.ts       # NEW — vision API OCR for scanned docs/images
-│   │   └── OcrFallbackParser.test.ts  # NEW — unit tests
+│   │   ├── OcrFallbackParser.test.ts  # NEW — unit tests
+│   │   ├── ImageParser.ts             # NEW — image → markdown via OcrFallbackParser
+│   │   └── ImageParser.test.ts        # NEW — unit tests
 ├── utils/
 │   └── convertedDocOutput.ts          # EXISTING — reused for save-to-vault
 ├── cache/
@@ -78,6 +80,57 @@ src/
 ```
 
 **Structure Decision**: New parsers live in `src/tools/parsers/` subdirectory to keep format-specific logic separated from the orchestrator. Extends existing `FileParserManager` rather than replacing it. Each parser is independently testable with no cross-dependencies.
+
+## Interface Bridging Strategy
+
+The **existing** `FileParser` interface in `FileParserManager.ts` uses:
+
+```typescript
+interface FileParser {
+  supportedExtensions: string[];
+  parseFile(file: TFile, vault: Vault): Promise<string>;
+}
+```
+
+The **new** parser contract (defined in `contracts/interfaces.md`) uses:
+
+```typescript
+interface FileParser {
+  readonly formatId: SupportedFormat;
+  readonly supportedMimeTypes: string[];
+  parse(
+    fileBuffer: ArrayBuffer,
+    filename: string,
+    options: ConversionOptions
+  ): Promise<ConversionResult>;
+  canHandle(mimeType: string): boolean;
+}
+```
+
+**Resolution**: Each new parser (LocalPdfParser, DocxParser, etc.) implements the **new** `FileParser` interface from `conversionTypes.ts`. The `FileParserManager` acts as the **adapter layer** — it wraps each new-style parser in a legacy-compatible registration that:
+
+1. Maps `supportedMimeTypes` → `supportedExtensions` via a MIME-to-extension lookup table
+2. Reads the `ArrayBuffer` from `TFile` via `vault.readBinary(file)` and delegates to `parse()`
+3. Extracts the `content` string from `ConversionResult` to satisfy the existing `Promise<string>` return type
+
+This preserves backward compatibility with existing callers (ContextManager, ChatManager) while new parsers use the richer typed contract internally.
+
+## Format Detection Strategy
+
+File format detection uses **extension-to-MIME mapping** (not binary magic bytes) for simplicity:
+
+1. `FileParserManager` maintains a static `Map<string, string>` mapping file extensions to MIME types (e.g., `"pdf" → "application/pdf"`, `"docx" → "application/vnd.openxmlformats-officedocument.wordprocessingml.document"`).
+2. On `parseFile()`, the file's `extension` property is looked up in this map to determine the MIME type.
+3. The MIME type is then matched against registered parsers via their `canHandle()` method.
+4. This avoids the complexity of binary magic byte detection while still routing through MIME types internally.
+
+## PDF Parser Coexistence Strategy
+
+The new `LocalPdfParser` **replaces** the existing `PDFParser` (Brevilabs cloud) in non-project mode. The existing `Docs4LLMParser` (project-mode cloud parser) remains untouched.
+
+- **Non-project mode**: `LocalPdfParser` is registered for `"pdf"` extension, replacing the old `PDFParser`. Self-host (Miyo) fallback logic is retained inside `LocalPdfParser` as a secondary path.
+- **Project mode**: `Docs4LLMParser` continues to handle PDF via cloud API (no change).
+- Registration order in constructor determines which parser wins for a given extension.
 
 ## Complexity Tracking
 

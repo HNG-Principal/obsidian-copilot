@@ -125,3 +125,23 @@
 - Partial results: return what was converted + error array listing what failed
 - Password-protected files: detect early and return informative error (FR-010)
 - Timeout: configurable per-parser timeout (default 30s), returns partial result if available
+
+---
+
+## 7. EPUB Parsing Library
+
+**Decision**: Use `epub2` (or `epubjs` if bundleable) for EPUB parsing. If neither bundles cleanly in esbuild, fall back to manual ZIP + HTML extraction via `jszip` (already implicitly available through PPTX parsing).
+
+**Rationale**: EPUB files are ZIP archives containing XHTML chapters. A dedicated library simplifies chapter ordering and metadata extraction. However, many EPUB libraries assume browser or full Node.js environments and may not bundle in Electron/esbuild.
+
+**Alternatives Considered**:
+
+- **epub.js**: Designed for browser-based reading \u2014 heavy on rendering, not ideal for text-only extraction.
+- **Manual ZIP parsing only**: Viable as fallback \u2014 `jszip` extracts the XHTML files, then strip HTML tags. Loses chapter ordering metadata.
+- **@nicolo-ribaudo/epub**: Lightweight option but low npm downloads / maintenance risk.
+
+**Implementation Approach**:
+
+- **Phase 1 (T001)**: Evaluate `epub2` bundleability alongside other dependencies during the esbuild verification step (T003). If it fails, switch to `jszip` + manual XHTML parsing.
+- `EpubParser`: Extract OPF spine for chapter ordering \u2192 iterate chapters \u2192 strip HTML \u2192 emit `## Chapter: Title` markdown separators.
+- Metadata: extract title, author, publisher, ISBN from OPF metadata block.
