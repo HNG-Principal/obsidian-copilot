@@ -4,6 +4,7 @@ import { USER_SENDER } from "@/constants";
 import { cn } from "@/lib/utils";
 import { ChatMessage } from "@/types/message";
 import {
+  BookPlus,
   Check,
   Copy,
   LibraryBig,
@@ -20,6 +21,7 @@ interface ChatButtonsProps {
   onCopy: () => void;
   isCopied: boolean;
   onInsertIntoEditor?: () => void;
+  onSaveToWiki?: () => void;
   onRegenerate?: () => void;
   onEdit?: () => void;
   onDelete: () => void;
@@ -32,6 +34,7 @@ export const ChatButtons: React.FC<ChatButtonsProps> = ({
   onCopy,
   isCopied,
   onInsertIntoEditor,
+  onSaveToWiki,
   onRegenerate,
   onEdit,
   onDelete,
@@ -96,6 +99,16 @@ export const ChatButtons: React.FC<ChatButtonsProps> = ({
             </TooltipTrigger>
             <TooltipContent>Insert / Replace at cursor</TooltipContent>
           </Tooltip>
+          {onSaveToWiki && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button onClick={onSaveToWiki} variant="ghost2" size="fit" title="Save to Wiki">
+                  <BookPlus className="tw-size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Save to Wiki</TooltipContent>
+            </Tooltip>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost2" size="fit" onClick={onCopy} title="Copy">

@@ -22,6 +22,7 @@ import {
   getTimeInfoByEpochTool,
   getTimeRangeMsTool,
 } from "./TimeTools";
+import { saveToWikiTool } from "./WikiWriterTools";
 import { ToolDefinition, ToolRegistry } from "./ToolRegistry";
 import { youtubeTranscriptionTool } from "./YoutubeTools";
 
@@ -221,6 +222,22 @@ Example: Add "Bob Johnson" to attendees in notes/meeting.md:
 path: "notes/meeting.md"
 oldText: "## Attendees\\n- John Smith\\n- Jane Doe"
 newText: "## Attendees\\n- John Smith\\n- Jane Doe\\n- Bob Johnson"`,
+    },
+  },
+  {
+    tool: saveToWikiTool,
+    metadata: {
+      id: "saveToWiki",
+      displayName: "Save to Wiki",
+      description: "Send generated content to Wiki Writer for durable wiki capture",
+      category: "file",
+      copilotCommands: ["@wiki"],
+      customPromptInstructions: `For saveToWiki:
+- Use when the user explicitly asks to save, capture, or turn content into a durable wiki page
+- Especially prefer this tool when the user mentions @wiki
+- Pass the final note body in "content"
+- Optionally suggest defaultDomain and defaultPageType when the user already specified them
+- This tool opens Wiki Writer's save dialog so the user can confirm metadata before the file is created`,
     },
   },
 
