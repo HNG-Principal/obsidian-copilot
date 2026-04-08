@@ -3,6 +3,7 @@ import { atom, createStore, useAtomValue } from "jotai";
 import { v4 as uuidv4 } from "uuid";
 
 import { type ChainType } from "@/chainFactory";
+import { readIndexMetadata, writeIndexMetadata } from "@/search/indexMetadata";
 import { type SortStrategy, isSortStrategy } from "@/utils/recentUsageManager";
 import {
   AGENT_MAX_ITERATIONS_LIMIT,
@@ -15,6 +16,7 @@ import {
   EmbeddingModelProviders,
   SEND_SHORTCUT,
 } from "@/constants";
+import { Notice } from "obsidian";
 
 /**
  * We used to store commands in the settings file with the following interface.
@@ -151,6 +153,12 @@ export interface CopilotSettings {
   supadataApiKey: string;
   /** Enable lexical boosts (folder and graph) in search - default: true */
   enableLexicalBoosts: boolean;
+  /** Weight assigned to lexical ranking during hybrid search. */
+  hybridSearchTextWeight: number;
+  /** Enable post-fusion reranking when a reranker backend is available. */
+  enableReranking: boolean;
+  /** Maximum token budget used when generating semantic chunks. */
+  maxChunkTokens: number;
   /**
    * RAM limit for lexical search index (in MB)
    * Controls memory usage for full-text search operations
@@ -227,12 +235,59 @@ function resolveEmbeddingModelKey(settings: CopilotSettings): string {
 }
 
 /**
+ * Resolve the human-readable embedding model name for the active embedding model key.
+ */
+function resolveEmbeddingModelName(settings: CopilotSettings): string {
+  const resolvedKey = resolveEmbeddingModelKey(settings);
+  const matchingModel = (settings.activeEmbeddingModels || []).find(
+    (model) => getModelKeyFromModel(model) === resolvedKey
+  );
+
+  return matchingModel?.name ?? resolvedKey;
+}
+
+/**
+ * Mark the persisted search index stale when the embedding model changes.
+ */
+async function handleEmbeddingModelKeyChange(
+  previousSettings: CopilotSettings,
+  nextSettings: CopilotSettings
+): Promise<void> {
+  if (previousSettings.embeddingModelKey === nextSettings.embeddingModelKey) {
+    return;
+  }
+
+  if (typeof app === "undefined") {
+    return;
+  }
+
+  const metadata = await readIndexMetadata(app, nextSettings.enableIndexSync);
+  if (!metadata) {
+    return;
+  }
+
+  const nextEmbeddingModelName = resolveEmbeddingModelName(nextSettings);
+  if (metadata.embeddingModel === nextEmbeddingModelName && !metadata.stale) {
+    return;
+  }
+
+  await writeIndexMetadata(app, nextSettings.enableIndexSync, {
+    ...metadata,
+    stale: true,
+  });
+
+  new Notice("Embedding model changed. Run a full re-index to rebuild Copilot search.");
+}
+
+/**
  * Sets the settings in the atom.
  */
 export function setSettings(settings: Partial<CopilotSettings>) {
-  const newSettings = mergeAllActiveModelsWithCoreModels({ ...getSettings(), ...settings });
+  const previousSettings = getSettings();
+  const newSettings = mergeAllActiveModelsWithCoreModels({ ...previousSettings, ...settings });
   newSettings.embeddingModelKey = resolveEmbeddingModelKey(newSettings);
   settingsStore.set(settingsAtom, newSettings);
+  void handleEmbeddingModelKeyChange(previousSettings, newSettings);
 }
 
 /**
@@ -412,6 +467,24 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   } else {
     // Clamp to valid range
     sanitizedSettings.lexicalSearchRamLimit = Math.min(1000, Math.max(20, lexicalSearchRamLimit));
+  }
+
+  const hybridSearchTextWeight = Number(settingsToSanitize.hybridSearchTextWeight);
+  if (isNaN(hybridSearchTextWeight)) {
+    sanitizedSettings.hybridSearchTextWeight = DEFAULT_SETTINGS.hybridSearchTextWeight;
+  } else {
+    sanitizedSettings.hybridSearchTextWeight = Math.min(1, Math.max(0, hybridSearchTextWeight));
+  }
+
+  if (typeof sanitizedSettings.enableReranking !== "boolean") {
+    sanitizedSettings.enableReranking = DEFAULT_SETTINGS.enableReranking;
+  }
+
+  const maxChunkTokens = Number(settingsToSanitize.maxChunkTokens);
+  if (isNaN(maxChunkTokens)) {
+    sanitizedSettings.maxChunkTokens = DEFAULT_SETTINGS.maxChunkTokens;
+  } else {
+    sanitizedSettings.maxChunkTokens = Math.min(2048, Math.max(128, maxChunkTokens));
   }
 
   // Ensure autoAddActiveContentToContext has a default value (migrate from old settings)

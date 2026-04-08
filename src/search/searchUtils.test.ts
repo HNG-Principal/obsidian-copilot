@@ -2,10 +2,15 @@ import * as settingsModel from "@/settings/model";
 import * as utils from "@/utils";
 import { TFile } from "obsidian";
 import {
+  computeContentHash,
+  computeWordCount,
   categorizePatterns,
   createPatternSettingsValue,
+  extractMarkdownHeadings,
+  extractMarkdownTags,
   getDecodedPatterns,
   getMatchingPatterns,
+  parseTitleDate,
   previewPatternValue,
   shouldIndexFile,
 } from "./searchUtils";
@@ -226,6 +231,62 @@ describe("searchUtils", () => {
         notePatterns: ["[[draft]]"],
       };
       expect(shouldIndexFile(file, null, exclusions)).toBe(false);
+    });
+  });
+
+  describe("computeContentHash", () => {
+    it("should return a stable md5 hash", () => {
+      expect(computeContentHash("abc")).toBe("900150983cd24fb0d6963f7d28e17f72");
+      expect(computeContentHash("abc")).toBe(computeContentHash("abc"));
+    });
+  });
+
+  describe("parseTitleDate", () => {
+    it("should parse dashed date titles", () => {
+      expect(parseTitleDate("2026-04-08 Daily Note.md")).toBe(Date.UTC(2026, 3, 8));
+    });
+
+    it("should parse dotted date titles", () => {
+      expect(parseTitleDate("journal/2026.04.08.md")).toBe(Date.UTC(2026, 3, 8));
+    });
+
+    it("should parse compact date titles", () => {
+      expect(parseTitleDate("Meeting-20260408")).toBe(Date.UTC(2026, 3, 8));
+    });
+
+    it("should reject invalid dates", () => {
+      expect(parseTitleDate("2026-13-08.md")).toBeUndefined();
+      expect(parseTitleDate("notes-without-date.md")).toBeUndefined();
+    });
+  });
+
+  describe("markdown metadata helpers", () => {
+    const sampleMarkdown = `---
+tags:
+  - project/alpha
+  - writing
+date: 2026-04-08
+---
+
+# Title
+
+Working on #Project/Alpha and #writing today.
+
+## Next Steps
+
+Ship the feature this week.
+`;
+
+    it("should extract tags from frontmatter and inline markdown", () => {
+      expect(extractMarkdownTags(sampleMarkdown)).toEqual(["#project/alpha", "#writing"]);
+    });
+
+    it("should extract plain heading text", () => {
+      expect(extractMarkdownHeadings(sampleMarkdown)).toEqual(["Title", "Next Steps"]);
+    });
+
+    it("should compute word count without frontmatter noise", () => {
+      expect(computeWordCount(sampleMarkdown)).toBeGreaterThanOrEqual(10);
     });
   });
 

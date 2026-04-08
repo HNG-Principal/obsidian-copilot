@@ -29,6 +29,22 @@ Semantic search finds notes that are conceptually related, even if they don't sh
 - **Cost**: Requires embedding API calls (costs money for paid embedding models)
 - **Enable**: **Settings → Copilot → QA → Enable Semantic Search** — turn this on to activate semantic search
 
+### Hybrid Search
+
+When semantic search is enabled, Copilot can combine meaning-based matches with exact keyword matches.
+
+- **What it does**: blends conceptual matches with literal word matches so exact-note hits still rank highly
+- **Best for**: searches where you want both fuzzy recall and precise term matching
+- **Result**: a query like a project codename or unique phrase should still put the exact note near the top, while related notes remain visible
+
+### Reranking
+
+After the first pass of search, Copilot can optionally rerank the top results to improve the order of the most relevant notes.
+
+- **Enable**: turn on **Reranking** in QA settings
+- **What it changes**: only the order of the top search results, not which notes are indexed
+- **Fallback behavior**: if no reranking backend is available, Copilot keeps the original order
+
 ---
 
 ## Index Management
@@ -39,10 +55,10 @@ The semantic search index stores the vector embeddings of your notes. Manage it 
 
 Controls when Copilot automatically updates the index:
 
-| Strategy | When the index updates |
-|---|---|
-| **NEVER** | Manual only — you must trigger indexing yourself |
-| **ON STARTUP** | Updates when Obsidian starts or the plugin reloads |
+| Strategy           | When the index updates                                                 |
+| ------------------ | ---------------------------------------------------------------------- |
+| **NEVER**          | Manual only — you must trigger indexing yourself                       |
+| **ON STARTUP**     | Updates when Obsidian starts or the plugin reloads                     |
 | **ON MODE SWITCH** | Updates when you switch to Vault QA or Copilot Plus mode (Recommended) |
 
 The default is **ON MODE SWITCH**.
@@ -55,14 +71,18 @@ The default is **ON MODE SWITCH**.
 
 Updates only notes that have been added, modified, or deleted since the last index. Faster and cheaper than a full reindex.
 
+This is the normal maintenance path for semantic search. Copilot keeps track of indexed note content, so routine refreshes only process notes that actually changed.
+
 ### Force Reindex
 
 **Command palette → Force reindex vault**
 
 Rebuilds the entire index from scratch. Use this if:
+
 - You changed your embedding model
 - The index seems corrupted or missing results
 - You've made many changes and want a clean state
+- Search warns that your index is stale
 
 ### Garbage Collection
 
@@ -75,6 +95,14 @@ Removes entries from the index for notes that have been deleted from your vault.
 **Command palette → Clear local Copilot index**
 
 Deletes the entire index. You'll need to reindex before semantic search works again.
+
+### What Happens on Startup and File Changes
+
+When automatic indexing is enabled, Copilot checks for changed notes on startup and batches file edits instead of rebuilding the entire search index every time.
+
+- New notes can be added to the semantic index without a full rebuild
+- Edited notes are reprocessed automatically when indexing is active
+- Deleted notes are removed from the index on the next incremental update
 
 ### Debug Commands
 
@@ -104,6 +132,7 @@ This shows the total token count across your vault, which you can use to estimat
 **Settings → Copilot → QA → Exclusions**
 
 Comma-separated list of patterns. Notes matching these patterns are excluded. Supports:
+
 - Folder names: `private` — excludes the folder named "private"
 - Folder paths: `Work/Confidential` — excludes that specific subfolder
 - File extensions: `.pdf` — excludes all PDF files
@@ -126,6 +155,20 @@ Leave empty to include everything (except exclusions).
 
 ---
 
+## Time-Based Search
+
+Copilot can narrow results to notes from a specific period when your search implies a time window, such as recent work, last week, or a dated note range.
+
+Time filtering can use several signals from your notes:
+
+- File modified time
+- Dates in note titles such as `2026-04-08`, `2026.04.08`, or `20260408`
+- A `date` field in note properties
+
+This works best when your notes already use consistent dates in filenames or properties.
+
+---
+
 ## Embedding Settings
 
 These settings appear in **Settings → Copilot → QA** when Semantic Search is enabled.
@@ -145,6 +188,39 @@ How many text chunks to send per API request. Default is 16. Larger batches are 
 The index is split into partitions to handle large vaults. You can control the number of partitions in **Settings → Copilot → QA → Number of Partitions**. If you have a large vault, increase this value to avoid index errors.
 
 > **If you hit a "RangeError: invalid string length" error**: This means your vault is too large for a single partition. Increase the number of partitions in QA settings. A good rule of thumb is that the first partition file (found in `.obsidian/`) should be under ~400 MB.
+
+### Chunk Size
+
+Copilot splits notes into smaller sections before creating embeddings. Smaller chunks can improve precision, while larger chunks may preserve more surrounding context.
+
+- **Default**: 512 tokens
+- **Use smaller values** if results feel too broad
+- **Use larger values** if important context is split too aggressively
+
+Copilot also keeps section structure where possible, so headings can help search land in the right part of a note.
+
+---
+
+## Embedding Model Changes
+
+If you switch to a different embedding model, the existing semantic index may no longer be valid.
+
+When that happens, Copilot marks the index as stale and prompts you to run a full reindex. Until you rebuild, semantic search results may be incomplete or unavailable.
+
+This is expected. Different embedding models produce different vector dimensions and representations, so old index data cannot be reused safely.
+
+---
+
+## Multilingual Search
+
+Copilot does not need a separate multilingual mode. Multilingual search depends on the embedding model you choose.
+
+Recommended multilingual embedding models include:
+
+- Cohere `embed-multilingual-v3.0`
+- OpenAI `text-embedding-3-large`
+
+If your vault contains notes in multiple languages, choose a multilingual embedding model before building the semantic index, then run a full reindex.
 
 ---
 

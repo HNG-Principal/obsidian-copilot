@@ -9,6 +9,7 @@ jest.mock("@/utils", () => ({
 }));
 jest.mock("@/search/searchUtils", () => ({
   isInternalExcludedFile: jest.fn().mockReturnValue(false),
+  parseTitleDate: jest.requireActual("@/search/searchUtils").parseTitleDate,
   shouldIndexFile: jest.fn().mockReturnValue(true),
   getMatchingPatterns: jest.fn().mockReturnValue({ inclusions: null, exclusions: null }),
 }));
@@ -335,6 +336,65 @@ describe("FilterRetriever", () => {
         maxK: 30,
       });
       expect(withoutTime.hasTimeRange()).toBe(false);
+    });
+
+    it("should include files whose title date falls inside the range", async () => {
+      const { extractNoteFiles } = jest.requireMock("@/utils");
+      extractNoteFiles.mockReturnValue([]);
+
+      const file = new (TFile as any)("2026-04-08.md");
+      Object.setPrototypeOf(file, (TFile as any).prototype);
+      file.path = "2026-04-08.md";
+      file.basename = "2026-04-08";
+      file.stat = { mtime: Date.UTC(2025, 0, 1), ctime: Date.UTC(2025, 0, 1) };
+
+      mockApp.vault.getMarkdownFiles.mockReturnValue([file]);
+      mockApp.vault.cachedRead.mockResolvedValue("Dated note");
+      mockApp.metadataCache.getFileCache.mockReturnValue({ tags: [], frontmatter: {} });
+
+      const retriever = new FilterRetriever(mockApp, {
+        salientTerms: [],
+        maxK: 30,
+        timeRange: {
+          startTime: Date.UTC(2026, 3, 1),
+          endTime: Date.UTC(2026, 3, 30),
+        },
+      });
+
+      const results = await retriever.getRelevantDocuments("dated query");
+      expect(results).toHaveLength(1);
+      expect(results[0].metadata.path).toBe("2026-04-08.md");
+    });
+
+    it("should include files whose frontmatter date falls inside the range", async () => {
+      const { extractNoteFiles } = jest.requireMock("@/utils");
+      extractNoteFiles.mockReturnValue([]);
+
+      const file = new (TFile as any)("notes/frontmatter.md");
+      Object.setPrototypeOf(file, (TFile as any).prototype);
+      file.path = "notes/frontmatter.md";
+      file.basename = "frontmatter";
+      file.stat = { mtime: Date.UTC(2025, 0, 1), ctime: Date.UTC(2025, 0, 1) };
+
+      mockApp.vault.getMarkdownFiles.mockReturnValue([file]);
+      mockApp.vault.cachedRead.mockResolvedValue("Frontmatter dated note");
+      mockApp.metadataCache.getFileCache.mockReturnValue({
+        tags: [],
+        frontmatter: { date: "2026-04-10" },
+      });
+
+      const retriever = new FilterRetriever(mockApp, {
+        salientTerms: [],
+        maxK: 30,
+        timeRange: {
+          startTime: Date.UTC(2026, 3, 1),
+          endTime: Date.UTC(2026, 3, 30),
+        },
+      });
+
+      const results = await retriever.getRelevantDocuments("dated query");
+      expect(results).toHaveLength(1);
+      expect(results[0].metadata.path).toBe("notes/frontmatter.md");
     });
   });
 });

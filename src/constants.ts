@@ -973,6 +973,9 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   perplexityApiKey: "",
   supadataApiKey: "",
   enableLexicalBoosts: true,
+  hybridSearchTextWeight: 0.3,
+  enableReranking: true,
+  maxChunkTokens: 512,
   suggestedDefaultCommands: false,
   autonomousAgentMaxIterations: 4,
   autonomousAgentEnabledToolIds: [
