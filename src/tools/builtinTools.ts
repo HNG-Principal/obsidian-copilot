@@ -38,6 +38,7 @@ export const BUILTIN_TOOLS: ToolDefinition[] = [
       displayName: "Vault Search",
       description: "Search through your vault notes",
       category: "search",
+      approvalCategory: "auto",
       copilotCommands: ["@vault"],
       customPromptInstructions: `For localSearch (searching notes based on their contents in the vault):
 - You MUST always provide both "query" (string) and "salientTerms" (array of strings)
@@ -83,6 +84,7 @@ For broad searches:
       description:
         "Search the INTERNET (NOT vault notes) when user explicitly asks for web/online information",
       category: "search",
+      approvalCategory: "auto",
       copilotCommands: ["@websearch", "@web"],
       customPromptInstructions: `For webSearch:
 - ONLY use when the user's query contains explicit web-search intent like:
@@ -102,6 +104,7 @@ Example: "search the web for python tutorials" → query: "python tutorials", ch
       displayName: "Get Current Time",
       description: "Get the current time in any timezone",
       category: "time",
+      approvalCategory: "auto",
       isAlwaysEnabled: true,
       customPromptInstructions: `For time queries (IMPORTANT: Always use UTC offsets, not timezone names):
 
@@ -122,6 +125,7 @@ Examples:
       displayName: "Get Time Info",
       description: "Convert epoch timestamp to human-readable format",
       category: "time",
+      approvalCategory: "auto",
       isAlwaysEnabled: true,
     },
   },
@@ -132,6 +136,7 @@ Examples:
       displayName: "Get Time Range",
       description: "Convert time expressions to date ranges",
       category: "time",
+      approvalCategory: "auto",
       isAlwaysEnabled: true,
       customPromptInstructions: `For time-based queries:
 - Use this tool to convert time expressions like "last week", "yesterday", "last month" to proper time ranges
@@ -147,6 +152,7 @@ Example: For "last week" → timeExpression: "last week"`,
       displayName: "Convert Timezones",
       description: "Convert time between different timezones",
       category: "time",
+      approvalCategory: "auto",
       isAlwaysEnabled: true,
       customPromptInstructions: `For timezone conversions:
 
@@ -162,6 +168,7 @@ Example: "what time is 6pm PT in Tokyo" (PT is UTC-8 or UTC-7, Tokyo is UTC+9) �
       displayName: "Read Note",
       description: "Read a specific note in sequential chunks using its own line-chunking logic.",
       category: "file",
+      approvalCategory: "auto",
       requiresVault: true,
       isAlwaysEnabled: true,
       customPromptInstructions: `For readNote:
@@ -186,6 +193,7 @@ Examples:
       displayName: "Write to File",
       description: "Create or rewrite files in your vault",
       category: "file",
+      approvalCategory: "confirm",
       requiresVault: true,
       timeoutMs: 0, // No timeout - waits for user preview decision
       copilotCommands: ["@composer"],
@@ -210,6 +218,7 @@ Examples:
       displayName: "Edit File",
       description: "Make a targeted, single-match edit to an existing file",
       category: "file",
+      approvalCategory: "confirm",
       requiresVault: true,
       timeoutMs: 0, // No timeout - waits for user preview decision
       customPromptInstructions: `For editFile:
@@ -231,6 +240,7 @@ newText: "## Attendees\\n- John Smith\\n- Jane Doe\\n- Bob Johnson"`,
       displayName: "Save to Wiki",
       description: "Send generated content to Wiki Writer for durable wiki capture",
       category: "file",
+      approvalCategory: "confirm",
       copilotCommands: ["@wiki"],
       customPromptInstructions: `For saveToWiki:
 - Use when the user explicitly asks to save, capture, or turn content into a durable wiki page
@@ -249,6 +259,7 @@ newText: "## Attendees\\n- John Smith\\n- Jane Doe\\n- Bob Johnson"`,
       displayName: "YouTube Transcription",
       description: "Get transcripts from YouTube videos",
       category: "media",
+      approvalCategory: "auto",
       isPlusOnly: true,
       requiresUserMessageContent: true,
       customPromptInstructions: `For youtubeTranscription:
@@ -271,6 +282,7 @@ export function registerFileTreeTool(vault: Vault): void {
       displayName: "File Tree",
       description: "Browse vault file structure",
       category: "file",
+      approvalCategory: "auto",
       isAlwaysEnabled: true,
       requiresVault: true,
       isBackground: true,
@@ -301,6 +313,7 @@ export function registerTagListTool(): void {
       displayName: "Tag List",
       description: "List vault tags with occurrence statistics",
       category: "file",
+      approvalCategory: "auto",
       isAlwaysEnabled: true,
       requiresVault: true,
       isBackground: true,
@@ -331,6 +344,7 @@ export function registerMemoryTool(): void {
       description:
         "Save information to user memory when the user explicitly asks to remember something or update the memory",
       category: "memory",
+      approvalCategory: "confirm",
       copilotCommands: ["@memory"],
       isAlwaysEnabled: true,
       customPromptInstructions: `For updateMemory:
@@ -356,6 +370,7 @@ export function registerCliTools(): void {
       displayName: "Daily Note",
       description: "Create or read today's daily note, or get its path",
       category: "cli",
+      approvalCategory: "auto",
       requiresVault: true,
       customPromptInstructions: `For obsidianDailyNote:
 - Use for daily note operations: creating, reading content, or getting the file path.
@@ -378,6 +393,7 @@ export function registerCliTools(): void {
       displayName: "Random Note",
       description: "Read a random note using the official Obsidian CLI",
       category: "cli",
+      approvalCategory: "auto",
       requiresVault: true,
       customPromptInstructions: `For obsidianRandomRead:
 - Use when the user explicitly asks for a random note or random note content.
@@ -393,6 +409,7 @@ export function registerCliTools(): void {
       displayName: "Properties",
       description: "Read frontmatter properties from notes or list all property names in the vault",
       category: "cli",
+      approvalCategory: "auto",
       requiresVault: true,
       customPromptInstructions: `For obsidianProperties:
 - Use to inspect frontmatter properties across the vault or within a specific note.
@@ -412,6 +429,7 @@ export function registerCliTools(): void {
       displayName: "Tasks",
       description: "List tasks across the vault with filters for status, file, and daily note",
       category: "cli",
+      approvalCategory: "auto",
       requiresVault: true,
       customPromptInstructions: `For obsidianTasks:
 - ALWAYS use this tool when the user asks about tasks, todos, or checkboxes. Do NOT use localSearch for task queries.
@@ -433,6 +451,7 @@ export function registerCliTools(): void {
       displayName: "Links",
       description: "Query the vault link graph: backlinks, outgoing links, orphans, unresolved",
       category: "cli",
+      approvalCategory: "auto",
       requiresVault: true,
       customPromptInstructions: `For obsidianLinks:
 - Use to explore the vault's link graph.
@@ -451,6 +470,7 @@ export function registerCliTools(): void {
       displayName: "Templates",
       description: "List available templates or read template content",
       category: "cli",
+      approvalCategory: "auto",
       requiresVault: true,
       customPromptInstructions: `For obsidianTemplates:
 - Use 'templates' to list all available templates when you need to find the right template for a task.
@@ -466,6 +486,7 @@ export function registerCliTools(): void {
       displayName: "Bases",
       description: "List Base files, views, query data, or create new items in Obsidian Bases",
       category: "cli",
+      approvalCategory: "auto",
       requiresVault: true,
       customPromptInstructions: `For obsidianBases:
 - Use to explore and manage structured data in Obsidian Base (.base) database files.

@@ -3,6 +3,9 @@ import { checkIsPlusUser, isSelfHostModeValid } from "@/plusUtils";
 import { getSettings } from "@/settings/model";
 import { ToolManager } from "@/tools/toolManager";
 import { ToolRegistry } from "@/tools/ToolRegistry";
+import { ToolMetadata } from "@/tools/ToolRegistry";
+import { formatToolResult } from "@/tools/ToolResultFormatter";
+import { ToolInvocationStatus } from "@/tools/types";
 import { err2String } from "@/utils";
 
 /**
@@ -18,11 +21,30 @@ export interface ToolExecutionResult {
   toolName: string;
   result: string;
   success: boolean;
+  status?: ToolInvocationStatus;
+  durationMs?: number;
+  approvedBy?: "auto" | "user";
   /**
    * Optional display-friendly version of the tool result for UI rendering.
    * When absent, fallback to `result` for display purposes.
    */
   displayResult?: string;
+}
+
+export interface ToolExecutionOptions {
+  requireToolApproval?: boolean;
+  onApprovalRequest?: (request: { toolCall: ToolCall; metadata: ToolMetadata }) => Promise<boolean>;
+}
+
+/**
+ * Determine whether a tool execution should request explicit approval.
+ *
+ * @param tool - Tool metadata.
+ * @param requireToolApproval - Global approval setting.
+ * @returns True when execution should be user-approved.
+ */
+export function checkApprovalRequired(tool: ToolMetadata, requireToolApproval: boolean): boolean {
+  return requireToolApproval && tool.approvalCategory === "confirm";
 }
 
 /**
@@ -31,9 +53,11 @@ export interface ToolExecutionResult {
 export async function executeSequentialToolCall(
   toolCall: ToolCall,
   availableTools: any[],
-  originalUserMessage?: string
+  originalUserMessage?: string,
+  options?: ToolExecutionOptions
 ): Promise<ToolExecutionResult> {
   const DEFAULT_TOOL_TIMEOUT = 120000; // 120 seconds timeout per tool
+  const startedAt = Date.now();
 
   try {
     // Validate tool call
@@ -42,6 +66,8 @@ export async function executeSequentialToolCall(
         toolName: toolCall?.name || "unknown",
         result: "Error: Invalid tool call - missing tool name",
         success: false,
+        status: "failed",
+        durationMs: Date.now() - startedAt,
       };
     }
 
@@ -54,6 +80,8 @@ export async function executeSequentialToolCall(
         toolName: toolCall.name,
         result: `Error: Tool '${toolCall.name}' not found. Available tools: ${availableToolNames}. Make sure you have the tool enabled in the Agent settings.`,
         success: false,
+        status: "failed",
+        durationMs: Date.now() - startedAt,
       };
     }
 
@@ -69,8 +97,45 @@ export async function executeSequentialToolCall(
           toolName: toolCall.name,
           result: `Error: ${getToolDisplayName(toolCall.name)} requires a Copilot Plus subscription`,
           success: false,
+          status: "failed",
+          durationMs: Date.now() - startedAt,
         };
       }
+    }
+
+    const requireToolApproval = options?.requireToolApproval ?? getSettings().requireToolApproval;
+    const approvalRequired = metadata
+      ? checkApprovalRequired(metadata, requireToolApproval)
+      : false;
+    let approvedBy: "auto" | "user" | undefined = approvalRequired ? undefined : "auto";
+
+    if (approvalRequired && metadata && options?.onApprovalRequest) {
+      const approved = await options.onApprovalRequest({
+        toolCall,
+        metadata,
+      });
+
+      if (!approved) {
+        const rejectionResult = formatToolResult(
+          toolCall.name,
+          JSON.stringify({
+            error: true,
+            status: "rejected",
+            message: `User rejected ${getToolDisplayName(toolCall.name)}.`,
+          }),
+          "error"
+        );
+
+        return {
+          toolName: toolCall.name,
+          result: rejectionResult,
+          success: false,
+          status: "rejected",
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      approvedBy = "user";
     }
 
     // Prepare tool arguments
@@ -115,6 +180,9 @@ export async function executeSequentialToolCall(
           status: "empty",
         }),
         success: true,
+        status: "completed",
+        durationMs: Date.now() - startedAt,
+        approvedBy,
       };
     }
 
@@ -122,6 +190,9 @@ export async function executeSequentialToolCall(
       toolName: toolCall.name,
       result: typeof result === "string" ? result : JSON.stringify(result),
       success: true,
+      status: "completed",
+      durationMs: Date.now() - startedAt,
+      approvedBy,
     };
   } catch (error) {
     // Log actionable error with args for debugging schema mismatches
@@ -134,10 +205,14 @@ export async function executeSequentialToolCall(
     } else {
       logError(`[ToolCall] Error executing "${toolCall.name}": ${errorMsg}`);
     }
+    const durationMs = Date.now() - startedAt;
+    const status = errorMsg.includes("timed out") ? "timeout" : "failed";
     return {
       toolName: toolCall.name,
-      result: `Error: ${errorMsg}`,
+      result: formatToolResult(toolCall.name, `Error: ${errorMsg}`, "error"),
       success: false,
+      status,
+      durationMs,
     };
   }
 }

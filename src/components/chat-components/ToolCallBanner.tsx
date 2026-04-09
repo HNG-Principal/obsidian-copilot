@@ -1,7 +1,7 @@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { ToolResultFormatter } from "@/tools/ToolResultFormatter";
-import { Check, ChevronRight, X } from "lucide-react";
+import { Check, ChevronRight, LoaderCircle, X } from "lucide-react";
 import React, { useMemo, useState } from "react";
 
 // Animation constants
@@ -26,6 +26,7 @@ interface ToolCallBannerProps {
  * @returns Formatted result or null when there is nothing to show yet
  */
 const MAX_DISPLAY_CHARS = 5_000;
+const PREVIEW_CHARS = 200;
 
 /**
  * Produce a display-friendly tool result while guarding against oversized payloads.
@@ -72,10 +73,20 @@ export const ToolCallBanner: React.FC<ToolCallBannerProps> = ({
   const [isOpen, setIsOpen] = useState(false);
 
   const formattedResult = useMemo(() => formatToolResult(toolName, result), [toolName, result]);
+  const previewResult = useMemo(() => {
+    if (!formattedResult) {
+      return null;
+    }
+
+    return formattedResult.length > PREVIEW_CHARS
+      ? `${formattedResult.slice(0, PREVIEW_CHARS)}...`
+      : formattedResult;
+  }, [formattedResult]);
 
   // Defensive check: If we have a result, the tool is definitely done executing
   // This prevents infinite rolling animation if marker update fails or is delayed
   const actuallyExecuting = isExecuting && !result;
+  const hasError = Boolean(formattedResult && /^error:|^⚠️/i.test(formattedResult.trim()));
 
   // Don't allow expanding while executing
   const canExpand = !actuallyExecuting && formattedResult !== null;
@@ -129,6 +140,14 @@ export const ToolCallBanner: React.FC<ToolCallBannerProps> = ({
           </div>
 
           <div className="tw-flex tw-items-center tw-gap-2">
+            {actuallyExecuting ? (
+              <LoaderCircle className="tw-size-4 tw-animate-spin tw-text-muted" />
+            ) : hasError ? (
+              <X className="tw-size-4 tw-text-error" />
+            ) : (
+              <Check className="tw-size-4 tw-text-success" />
+            )}
+
             {/* Future: Accept/Reject buttons */}
             {!actuallyExecuting && onAccept && onReject && (
               <>
@@ -165,6 +184,12 @@ export const ToolCallBanner: React.FC<ToolCallBannerProps> = ({
             )}
           </div>
         </CollapsibleTrigger>
+
+        {!actuallyExecuting && previewResult && !isOpen && (
+          <div className="tw-border-t tw-border-border tw-px-3 tw-py-2 tw-text-xs tw-text-muted sm:tw-px-4">
+            {previewResult}
+          </div>
+        )}
 
         <CollapsibleContent>
           <div className="tw-border-t tw-border-border tw-px-3 tw-py-2.5 sm:tw-px-4 sm:tw-py-3">

@@ -1,20 +1,21 @@
+import { initializeBuiltinTools } from "@/tools/builtinTools";
 import { logWarn } from "@/logger";
+import { ToolRegistry } from "@/tools/ToolRegistry";
 
 export const getToolDescription = (tool: string): string => {
-  switch (tool) {
-    case "@vault":
-      return "Search through your vault for relevant information";
-    case "@websearch":
-      return "Search the web for information";
-    case "@composer":
-      return "Edit existing notes or create new notes.";
-    case "@memory":
-      return "Save information to user memory";
-    case "@wiki":
-      return "Capture content into Wiki Writer as a durable wiki page";
-    default:
-      return "";
+  const registry = ToolRegistry.getInstance();
+
+  if (registry.getAllTools().length === 0) {
+    initializeBuiltinTools(app?.vault);
   }
+
+  const mapping = registry.getCopilotCommandMappings().get(tool.toLowerCase());
+
+  if (mapping) {
+    return mapping.metadata.description;
+  }
+
+  return "";
 };
 
 export class ToolManager {
