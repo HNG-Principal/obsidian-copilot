@@ -973,9 +973,24 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   perplexityApiKey: "",
   supadataApiKey: "",
   enableLexicalBoosts: true,
+  hybridSearchTextWeight: 0.3,
+  enableReranking: true,
+  maxChunkTokens: 512,
   suggestedDefaultCommands: false,
   autonomousAgentMaxIterations: 4,
+  maxAgentTurns: 10,
+  requireToolApproval: true,
   autonomousAgentEnabledToolIds: [
+    "localSearch",
+    "readNote",
+    "webSearch",
+    "pomodoro",
+    "youtubeTranscription",
+    "writeFile",
+    "editFile",
+    "updateMemory",
+  ],
+  enabledTools: [
     "localSearch",
     "readNote",
     "webSearch",
@@ -1000,6 +1015,7 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   userSystemPromptsFolder: DEFAULT_SYSTEM_PROMPTS_FOLDER,
   defaultSystemPromptTitle: "",
   autoCompactThreshold: 128000,
+  maxFileSizeMB: 50,
   convertedDocOutputFolder: DEFAULT_CONVERTED_DOC_OUTPUT_FOLDER,
 };
 

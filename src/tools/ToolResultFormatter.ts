@@ -1,4 +1,28 @@
 /**
+ * Wrap a tool result in XML tags for LLM consumption.
+ *
+ * @param toolId - Tool identifier.
+ * @param result - Raw tool result string.
+ * @param status - Execution status.
+ * @param maxLength - Maximum payload length preserved in the XML wrapper.
+ * @returns XML-wrapped tool result.
+ */
+export function formatToolResult(
+  toolId: string,
+  result: string,
+  status: "success" | "error",
+  maxLength: number = 8000
+): string {
+  const normalizedResult = typeof result === "string" ? result : JSON.stringify(result);
+  const trimmedResult =
+    normalizedResult.length > maxLength
+      ? `${normalizedResult.slice(0, maxLength)}\n\n[truncated ${normalizedResult.length - maxLength} characters]`
+      : normalizedResult;
+
+  return `<tool-result tool="${toolId}" status="${status}">\n${trimmedResult}\n</tool-result>`;
+}
+
+/**
  * Derive a user-facing label from a readNote tool path.
  *
  * @param rawNotePath - Original note path supplied to the readNote tool.

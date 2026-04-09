@@ -1,6 +1,11 @@
 import { logInfo, logWarn } from "@/logger";
 import { getSettings } from "@/settings/model";
-import { isInternalExcludedFile, shouldIndexFile, getMatchingPatterns } from "@/search/searchUtils";
+import {
+  getMatchingPatterns,
+  isInternalExcludedFile,
+  parseTitleDate,
+  shouldIndexFile,
+} from "@/search/searchUtils";
 import { extractNoteFiles } from "@/utils";
 import { Document } from "@langchain/core/documents";
 import { App, TFile, getAllTags } from "obsidian";
@@ -105,7 +110,9 @@ export class FilterRetriever {
       : Math.min(this.options.maxK, RETURN_ALL_LIMIT);
 
     for (const file of allFiles) {
-      if (file.stat.mtime >= startTime && file.stat.mtime <= endTime) {
+      const cache = this.app.metadataCache.getFileCache(file);
+      const matchedTimestamp = this.getMatchingTimestamp(file, cache, startTime, endTime);
+      if (matchedTimestamp !== undefined) {
         if (dailyNoteFiles.some((f) => f.path === file.path)) {
           continue;
         }
@@ -116,9 +123,8 @@ export class FilterRetriever {
 
         try {
           const content = await this.app.vault.cachedRead(file);
-          const cache = this.app.metadataCache.getFileCache(file);
 
-          const daysSinceModified = (Date.now() - file.stat.mtime) / (1000 * 60 * 60 * 24);
+          const daysSinceModified = (Date.now() - matchedTimestamp) / (1000 * 60 * 60 * 24);
           const recencyScore = Math.max(0.3, Math.min(1.0, 1.0 - daysSinceModified / 30));
 
           timeFilteredDocuments.push(
@@ -266,6 +272,44 @@ export class FilterRetriever {
     }
 
     return dailyNotes;
+  }
+
+  /**
+   * Resolve the first timestamp associated with a file that falls inside the requested time range.
+   */
+  private getMatchingTimestamp(
+    file: TFile,
+    cache: ReturnType<App["metadataCache"]["getFileCache"]>,
+    startTime: number,
+    endTime: number
+  ): number | undefined {
+    const candidates = [
+      file.stat.mtime,
+      parseTitleDate(file.basename),
+      this.parseFrontmatterDate(cache?.frontmatter?.date),
+    ].filter((value): value is number => typeof value === "number" && !Number.isNaN(value));
+
+    return candidates.find((value) => value >= startTime && value <= endTime);
+  }
+
+  /**
+   * Parse a frontmatter date field into epoch milliseconds.
+   */
+  private parseFrontmatterDate(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return undefined;
+    }
+
+    const directDate = Date.parse(value);
+    if (!Number.isNaN(directDate)) {
+      return directDate;
+    }
+
+    return parseTitleDate(value);
   }
 
   /**
