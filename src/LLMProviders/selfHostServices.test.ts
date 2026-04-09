@@ -1,4 +1,7 @@
-import { hasSelfHostSearchKey, selfHostWebSearch } from "./selfHostServices";
+import { hasSelfHostSearchKey, selfHostRerank, selfHostWebSearch } from "./selfHostServices";
+
+const mockSearch = jest.fn();
+const mockGetWebSearchProviderSettings = jest.fn(() => ({}));
 
 // --- Mocks ---
 
@@ -17,6 +20,11 @@ jest.mock("@/logger", () => ({
   logWarn: jest.fn(),
 }));
 
+jest.mock("@/services/webSearchProvider", () => ({
+  createWebSearchProvider: () => ({ search: mockSearch }),
+  getWebSearchProviderSettings: () => mockGetWebSearchProviderSettings(),
+}));
+
 // Mock global fetch
 const mockFetch = jest.fn();
 global.fetch = mockFetch;
@@ -25,10 +33,15 @@ beforeEach(() => {
   jest.clearAllMocks();
   // Default settings: firecrawl provider
   mockGetSettings.mockReturnValue({
+    webSearchProvider: "firecrawl",
     selfHostSearchProvider: "firecrawl",
+    searxngUrl: "",
     firecrawlApiKey: "fc-test-key",
     perplexityApiKey: "",
     supadataApiKey: "",
+    selfHostUrl: "http://localhost:8742",
+    selfHostApiKey: "self-host-key",
+    plusLicenseKey: "",
   });
 });
 
@@ -37,7 +50,9 @@ beforeEach(() => {
 describe("hasSelfHostSearchKey", () => {
   it("returns true when firecrawl provider has a key", () => {
     mockGetSettings.mockReturnValue({
+      webSearchProvider: "firecrawl",
       selfHostSearchProvider: "firecrawl",
+      searxngUrl: "",
       firecrawlApiKey: "fc-key",
       perplexityApiKey: "",
     });
@@ -46,7 +61,9 @@ describe("hasSelfHostSearchKey", () => {
 
   it("returns false when firecrawl provider has no key", () => {
     mockGetSettings.mockReturnValue({
+      webSearchProvider: "firecrawl",
       selfHostSearchProvider: "firecrawl",
+      searxngUrl: "",
       firecrawlApiKey: "",
       perplexityApiKey: "pplx-key",
     });
@@ -55,7 +72,9 @@ describe("hasSelfHostSearchKey", () => {
 
   it("returns true when perplexity provider has a key", () => {
     mockGetSettings.mockReturnValue({
+      webSearchProvider: "perplexity",
       selfHostSearchProvider: "perplexity",
+      searxngUrl: "",
       firecrawlApiKey: "",
       perplexityApiKey: "pplx-key",
     });
@@ -64,7 +83,9 @@ describe("hasSelfHostSearchKey", () => {
 
   it("returns false when perplexity provider has no key", () => {
     mockGetSettings.mockReturnValue({
+      webSearchProvider: "perplexity",
       selfHostSearchProvider: "perplexity",
+      searxngUrl: "",
       firecrawlApiKey: "fc-key",
       perplexityApiKey: "",
     });
@@ -73,36 +94,47 @@ describe("hasSelfHostSearchKey", () => {
 
   it("defaults to firecrawl for unknown provider", () => {
     mockGetSettings.mockReturnValue({
+      webSearchProvider: "firecrawl",
       selfHostSearchProvider: "unknown",
+      searxngUrl: "",
       firecrawlApiKey: "fc-key",
+      perplexityApiKey: "",
+    });
+    expect(hasSelfHostSearchKey()).toBe(true);
+  });
+
+  it("returns true when searxng provider has a URL", () => {
+    mockGetSettings.mockReturnValue({
+      webSearchProvider: "searxng",
+      selfHostSearchProvider: "firecrawl",
+      searxngUrl: "https://search.example.com",
+      firecrawlApiKey: "",
       perplexityApiKey: "",
     });
     expect(hasSelfHostSearchKey()).toBe(true);
   });
 });
 
-// --- Firecrawl search ---
-
-describe("selfHostWebSearch — Firecrawl", () => {
-  beforeEach(() => {
-    mockGetSettings.mockReturnValue({
-      selfHostSearchProvider: "firecrawl",
-      firecrawlApiKey: "fc-test-key",
-      perplexityApiKey: "",
-    });
-  });
-
-  it("parses v2 data.web format", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        data: {
-          web: [
-            { title: "Result 1", description: "Desc 1", url: "https://example.com/1" },
-            { title: "Result 2", description: "Desc 2", url: "https://example.com/2" },
-          ],
+describe("selfHostWebSearch", () => {
+  it("formats results returned by the provider layer", async () => {
+    mockSearch.mockResolvedValue({
+      provider: "firecrawl",
+      results: [
+        {
+          title: "Result 1",
+          url: "https://example.com/1",
+          snippet: "Desc 1",
+          source: "firecrawl",
+          rank: 1,
         },
-      }),
+        {
+          title: "Result 2",
+          url: "https://example.com/2",
+          snippet: "Desc 2",
+          source: "firecrawl",
+          rank: 2,
+        },
+      ],
     });
 
     const result = await selfHostWebSearch("test query");
@@ -112,221 +144,124 @@ describe("selfHostWebSearch — Firecrawl", () => {
     expect(result.content).toContain("### Result 2");
   });
 
-  it("falls back to data array for older responses", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        data: [{ title: "Old", description: "Old desc", url: "https://old.com" }],
-      }),
-    });
+  it("returns empty content when the provider has no results", async () => {
+    mockSearch.mockResolvedValue({ provider: "searxng", results: [] });
 
     const result = await selfHostWebSearch("test query");
 
-    expect(result.citations).toEqual(["https://old.com"]);
-    expect(result.content).toContain("### Old");
+    expect(result).toEqual({ content: "", citations: [] });
   });
 
-  it("returns empty results for malformed data", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: "not an array or object" }),
-    });
+  it("propagates provider failures", async () => {
+    mockSearch.mockRejectedValue(new Error("provider unavailable"));
 
-    const result = await selfHostWebSearch("test query");
-
-    expect(result.content).toBe("");
-    expect(result.citations).toEqual([]);
-  });
-
-  it("throws on HTTP errors", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-      text: async () => "Unauthorized",
-    });
-
-    await expect(selfHostWebSearch("test query")).rejects.toThrow(
-      "Firecrawl search failed (401): Unauthorized"
-    );
-  });
-
-  it("handles empty results array", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: { web: [] } }),
-    });
-
-    const result = await selfHostWebSearch("test query");
-
-    expect(result.content).toBe("");
-    expect(result.citations).toEqual([]);
-  });
-
-  it("sends correct request format", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: { web: [] } }),
-    });
-
-    await selfHostWebSearch("my query");
-
-    expect(mockFetch).toHaveBeenCalledWith("https://api.firecrawl.dev/v2/search", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer fc-test-key",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ query: "my query", limit: 5 }),
-    });
+    await expect(selfHostWebSearch("test query")).rejects.toThrow("provider unavailable");
   });
 });
 
-// --- Perplexity Sonar search ---
+// --- Provider dispatch compatibility ---
 
-describe("selfHostWebSearch — Perplexity Sonar", () => {
+describe("selfHostWebSearch — provider dispatch", () => {
+  it("delegates through createWebSearchProvider settings projection", async () => {
+    mockSearch.mockResolvedValue({ provider: "firecrawl", results: [] });
+
+    await selfHostWebSearch("test");
+
+    expect(mockGetWebSearchProviderSettings).toHaveBeenCalled();
+    expect(mockSearch).toHaveBeenCalledWith("test", 5);
+  });
+});
+
+describe("selfHostWebSearch — legacy fallback provider setting", () => {
+  it("still treats firecrawl as available when the deprecated provider field is set", async () => {
+    mockGetSettings.mockReturnValue({
+      webSearchProvider: "firecrawl",
+      selfHostSearchProvider: "unknown-provider",
+      searxngUrl: "",
+      firecrawlApiKey: "fc-key",
+      perplexityApiKey: "",
+    });
+    expect(hasSelfHostSearchKey()).toBe(true);
+  });
+});
+
+describe("selfHostRerank", () => {
   beforeEach(() => {
     mockGetSettings.mockReturnValue({
-      selfHostSearchProvider: "perplexity",
-      firecrawlApiKey: "",
-      perplexityApiKey: "pplx-test-key",
+      selfHostSearchProvider: "firecrawl",
+      firecrawlApiKey: "fc-test-key",
+      perplexityApiKey: "",
+      supadataApiKey: "",
+      selfHostUrl: "http://localhost:8742",
+      selfHostApiKey: "self-host-key",
+      plusLicenseKey: "",
     });
   });
 
-  it("parses standard Sonar response", async () => {
+  it("uses the versioned self-host rerank endpoint when available", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: "Here is the answer about AI." } }],
-        citations: ["https://source1.com", "https://source2.com"],
+        results: [
+          { index: 1, score: 0.9 },
+          { index: 0, score: 0.2 },
+        ],
+        model: "self-host-rerank",
       }),
     });
 
-    const result = await selfHostWebSearch("what is AI");
+    const result = await selfHostRerank("find best result", ["doc a", "doc b"]);
 
-    expect(result.content).toBe("Here is the answer about AI.");
-    expect(result.citations).toEqual(["https://source1.com", "https://source2.com"]);
-  });
-
-  it("handles missing citations", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        choices: [{ message: { content: "Some answer" } }],
-      }),
-    });
-
-    const result = await selfHostWebSearch("test");
-
-    expect(result.content).toBe("Some answer");
-    expect(result.citations).toEqual([]);
-  });
-
-  it("handles empty choices", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({
-        choices: [],
-        citations: ["https://cite.com"],
-      }),
-    });
-
-    const result = await selfHostWebSearch("test");
-
-    expect(result.content).toBe("");
-    expect(result.citations).toEqual(["https://cite.com"]);
-  });
-
-  it("throws on HTTP errors", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 429,
-      text: async () => "Rate limited",
-    });
-
-    await expect(selfHostWebSearch("test")).rejects.toThrow(
-      "Perplexity Sonar search failed (429): Rate limited"
-    );
-  });
-
-  it("sends correct request format with model=sonar", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: "" } }], citations: [] }),
-    });
-
-    await selfHostWebSearch("my query");
-
-    expect(mockFetch).toHaveBeenCalledWith("https://api.perplexity.ai/chat/completions", {
+    expect(mockFetch).toHaveBeenCalledWith("http://localhost:8742/v0/rerank", {
       method: "POST",
       headers: {
-        Authorization: "Bearer pplx-test-key",
+        Authorization: "Bearer self-host-key",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "sonar",
-        messages: [{ role: "user", content: "my query" }],
+        query: "find best result",
+        documents: ["doc a", "doc b"],
+        model: "rerank-2",
       }),
     });
-  });
-});
-
-// --- Provider dispatch ---
-
-describe("selfHostWebSearch — provider dispatch", () => {
-  it("routes to Firecrawl URL when provider is firecrawl", async () => {
-    mockGetSettings.mockReturnValue({
-      selfHostSearchProvider: "firecrawl",
-      firecrawlApiKey: "fc-key",
-      perplexityApiKey: "",
-    });
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: { web: [] } }),
-    });
-
-    await selfHostWebSearch("test");
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://api.firecrawl.dev/v2/search",
-      expect.any(Object)
-    );
+    expect(result.response.data).toEqual([
+      { index: 1, relevance_score: 0.9 },
+      { index: 0, relevance_score: 0.2 },
+    ]);
   });
 
-  it("routes to Perplexity URL when provider is perplexity", async () => {
-    mockGetSettings.mockReturnValue({
-      selfHostSearchProvider: "perplexity",
-      firecrawlApiKey: "",
-      perplexityApiKey: "pplx-key",
-    });
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: "" } }], citations: [] }),
-    });
+  it("falls back to the legacy rerank endpoint on 404", async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () => "Not found",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          response: {
+            object: "list",
+            data: [{ index: 0, relevance_score: 0.7 }],
+            model: "legacy-rerank",
+            usage: { total_tokens: 12 },
+          },
+          elapsed_time_ms: 5,
+        }),
+      });
 
-    await selfHostWebSearch("test");
+    const result = await selfHostRerank("query", ["doc a"]);
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://api.perplexity.ai/chat/completions",
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "http://localhost:8742/v0/rerank",
       expect.any(Object)
     );
-  });
-
-  it("defaults to Firecrawl for unknown provider value", async () => {
-    mockGetSettings.mockReturnValue({
-      selfHostSearchProvider: "unknown-provider",
-      firecrawlApiKey: "fc-key",
-      perplexityApiKey: "",
-    });
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ data: { web: [] } }),
-    });
-
-    await selfHostWebSearch("test");
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://api.firecrawl.dev/v2/search",
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:8742/rerank",
       expect.any(Object)
     );
+    expect(result.response.model).toBe("legacy-rerank");
   });
 });

@@ -1,13 +1,13 @@
 import { ImageProcessor } from "@/imageProcessing/imageProcessor";
-import {
-  BrevilabsClient,
-  Twitter4llmResponse,
-  Url4llmResponse,
-} from "@/LLMProviders/brevilabsClient";
+import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
 import { selfHostYoutube4llm } from "@/LLMProviders/selfHostServices";
+import { buildWebContentContextBlock } from "@/contextProcessor";
 import { err2String, isTwitterUrl, isYoutubeUrl } from "@/utils";
 import { logError } from "@/logger";
 import { isSelfHostModeValid } from "@/plusUtils";
+import { SocialMediaExtractor } from "@/services/socialMediaExtractor";
+import { WebExtractor } from "@/services/webExtractor";
+import type { ParsedURL } from "@/services/webContextTypes";
 import { getSettings } from "@/settings/model";
 
 export interface MentionData {
@@ -15,16 +15,21 @@ export interface MentionData {
   original: string;
   processed?: string;
   error?: string;
+  parsedUrl?: ParsedURL;
 }
 
 export class Mention {
   private static instance: Mention;
   private mentions: Map<string, MentionData>;
   private brevilabsClient: BrevilabsClient;
+  private webExtractor: WebExtractor;
+  private socialMediaExtractor: SocialMediaExtractor;
 
   private constructor() {
     this.mentions = new Map();
     this.brevilabsClient = BrevilabsClient.getInstance();
+    this.webExtractor = WebExtractor.getInstance();
+    this.socialMediaExtractor = SocialMediaExtractor.getInstance();
   }
 
   static getInstance(): Mention {
@@ -49,13 +54,20 @@ export class Mention {
       .filter((url, index, self) => self.indexOf(url) === index);
   }
 
-  async processUrl(url: string): Promise<Url4llmResponse & { error?: string }> {
+  async processUrl(url: string): Promise<ParsedURL> {
     try {
-      return await this.brevilabsClient.url4llm(url);
+      return await this.webExtractor.extractUrlContent(url);
     } catch (error) {
       const msg = err2String(error);
       logError(`Error processing URL ${url}: ${msg}`);
-      return { response: url, elapsed_time_ms: 0, error: msg };
+      return {
+        url,
+        content: "",
+        status: "failed",
+        error: { code: "network_error", message: msg },
+        extractedAt: Date.now(),
+        byteLength: 0,
+      };
     }
   }
 
@@ -73,13 +85,25 @@ export class Mention {
     }
   }
 
-  async processTwitterUrl(url: string): Promise<Twitter4llmResponse & { error?: string }> {
+  async processTwitterUrl(url: string): Promise<ParsedURL> {
     try {
-      return await this.brevilabsClient.twitter4llm(url);
+      const parsed = await this.socialMediaExtractor.extractSocialPost(url);
+      if (!parsed) {
+        return await this.webExtractor.extractUrlContent(url);
+      }
+
+      return parsed;
     } catch (error) {
       const msg = err2String(error);
       logError(`Error processing Twitter URL ${url}: ${msg}`);
-      return { response: url, elapsed_time_ms: 0, error: msg };
+      return {
+        url,
+        content: "",
+        status: "failed",
+        error: { code: "network_error", message: msg },
+        extractedAt: Date.now(),
+        byteLength: 0,
+      };
     }
   }
 
@@ -135,8 +159,15 @@ export class Mention {
           this.mentions.set(url, {
             type: "twitter",
             original: url,
-            processed: processed.response,
-            error: processed.error,
+            processed: [
+              processed.author ? `Author: ${processed.author}` : null,
+              processed.publicationDate ? `Date: ${processed.publicationDate}` : null,
+              processed.content,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            error: processed.error?.message,
+            parsedUrl: processed,
           });
         }
         return { type: "twitter", data: this.mentions.get(url) };
@@ -149,8 +180,9 @@ export class Mention {
         this.mentions.set(url, {
           type: "url",
           original: url,
-          processed: processed.response,
-          error: processed.error,
+          processed: buildWebContentContextBlock(processed),
+          error: processed.error?.message,
+          parsedUrl: processed,
         });
       }
       return { type: "url", data: this.mentions.get(url) };
@@ -174,12 +206,14 @@ export class Mention {
         } else if (result.type === "twitter") {
           urlContext += `\n\n<twitter_content>\n<url>${urlData.original}</url>\n<content>\n${urlData.processed}\n</content>\n</twitter_content>`;
         } else {
-          urlContext += `\n\n<url_content>\n<url>${urlData.original}</url>\n<content>\n${urlData.processed}\n</content>\n</url_content>`;
+          urlContext += urlData.processed;
         }
       }
 
       if (urlData.error) {
         processedErrorUrls[urlData.original] = urlData.error;
+      } else if (urlData.parsedUrl?.status === "partial" && urlData.parsedUrl.error) {
+        processedErrorUrls[urlData.original] = urlData.parsedUrl.error.message;
       }
     });
 

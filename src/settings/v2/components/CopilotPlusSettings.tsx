@@ -249,17 +249,32 @@ export const CopilotPlusSettings: React.FC = () => {
                     type="select"
                     title="Web Search Provider"
                     description="Choose which service to use for self-host web search."
-                    value={settings.selfHostSearchProvider}
+                    value={settings.webSearchProvider}
                     onChange={(value) =>
-                      updateSetting("selfHostSearchProvider", value as "firecrawl" | "perplexity")
+                      updateSetting(
+                        "webSearchProvider",
+                        value as "firecrawl" | "perplexity" | "searxng"
+                      )
                     }
                     options={[
                       { label: "Firecrawl (default)", value: "firecrawl" },
                       { label: "Perplexity Sonar", value: "perplexity" },
+                      { label: "SearXNG", value: "searxng" },
                     ]}
                   />
 
-                  {settings.selfHostSearchProvider === "firecrawl" && (
+                  {settings.webSearchProvider === "searxng" && (
+                    <SettingItem
+                      type="text"
+                      title="SearXNG URL"
+                      description="Base URL for your self-hosted SearXNG instance."
+                      value={settings.searxngUrl}
+                      onChange={(value) => updateSetting("searxngUrl", value)}
+                      placeholder="https://search.example.com"
+                    />
+                  )}
+
+                  {settings.webSearchProvider === "firecrawl" && (
                     <SettingItem
                       type="password"
                       title="Firecrawl API Key"
@@ -282,7 +297,7 @@ export const CopilotPlusSettings: React.FC = () => {
                     />
                   )}
 
-                  {settings.selfHostSearchProvider === "perplexity" && (
+                  {settings.webSearchProvider === "perplexity" && (
                     <SettingItem
                       type="password"
                       title="Perplexity API Key"
@@ -304,6 +319,30 @@ export const CopilotPlusSettings: React.FC = () => {
                       placeholder="pplx-..."
                     />
                   )}
+
+                  <SettingItem
+                    type="number"
+                    title="URL Cache TTL (hours)"
+                    description="How long extracted URL content stays valid before Copilot refetches it."
+                    value={settings.urlCacheTTLHours}
+                    onChange={(value) => updateSetting("urlCacheTTLHours", Number(value))}
+                  />
+
+                  <SettingItem
+                    type="number"
+                    title="Max URL Cache Entries"
+                    description="Maximum number of cached URL extraction entries kept on disk."
+                    value={settings.maxUrlCacheEntries}
+                    onChange={(value) => updateSetting("maxUrlCacheEntries", Number(value))}
+                  />
+
+                  <SettingItem
+                    type="number"
+                    title="URL Extraction Timeout (ms)"
+                    description="Maximum time Copilot waits for URL extraction before it reports a timeout."
+                    value={settings.urlExtractionTimeoutMs}
+                    onChange={(value) => updateSetting("urlExtractionTimeoutMs", Number(value))}
+                  />
 
                   <SettingItem
                     type="password"

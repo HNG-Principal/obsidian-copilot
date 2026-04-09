@@ -3,9 +3,13 @@ import { ChainType } from "@/chainFactory";
 import { RESTRICTION_MESSAGES } from "@/constants";
 import { logWarn, logInfo, logError } from "@/logger";
 import { escapeXml } from "@/LLMProviders/chainRunner/utils/xmlParsing";
+import { formatWebContentContext } from "@/services/webContextFormatting";
+import type { ParsedURL } from "@/services/webContextTypes";
 import { getWebViewerService } from "@/services/webViewerService/webViewerServiceSingleton";
 import { WebViewerTimeoutError } from "@/services/webViewerService/webViewerServiceTypes";
-import { FileParserManager } from "@/tools/FileParserManager";
+import { FileParserManager, type ParsedFileResult } from "@/tools/FileParserManager";
+import { isConversionErrorLike } from "@/tools/parsers/conversionErrorMessages";
+import { saveConvertedDocOutput } from "@/utils/convertedDocOutput";
 import { isPlusChain, isTextReadableFile } from "@/utils";
 import { normalizeUrlString } from "@/utils/urlNormalization";
 import { TFile, Vault, Notice } from "obsidian";
@@ -32,6 +36,36 @@ interface MarkdownSegment {
   found: boolean;
 }
 
+interface ConvertedDocumentContextOptions {
+  saveConvertedOutput?: boolean;
+  convertedDocOutputFolder?: string;
+}
+
+type ConvertedDocumentContextFile = TFile & ConvertedDocumentContextOptions;
+
+const CONVERTED_DOCUMENT_TAG = "converted-document";
+const DEFAULT_WEB_CONTENT_CONTEXT_CHARS = 12000;
+
+/**
+ * Build a `<web-content>` prompt block and truncate oversized content when needed.
+ */
+export function buildWebContentContextBlock(
+  parsedUrl: ParsedURL,
+  maxContentChars = DEFAULT_WEB_CONTENT_CONTEXT_CHARS
+): string {
+  if (parsedUrl.error || parsedUrl.content.length <= maxContentChars) {
+    return formatWebContentContext(parsedUrl);
+  }
+
+  return formatWebContentContext({
+    ...parsedUrl,
+    status: "partial",
+    content:
+      `${parsedUrl.content.slice(0, maxContentChars).trimEnd()}\n\n` +
+      "[Content truncated to fit the context window.]",
+  });
+}
+
 export class ContextProcessor {
   private static instance: ContextProcessor;
 
@@ -42,6 +76,99 @@ export class ContextProcessor {
       ContextProcessor.instance = new ContextProcessor();
     }
     return ContextProcessor.instance;
+  }
+
+  /**
+   * Check whether a file should flow through the converted-document pipeline.
+   *
+   * Markdown, canvas, and other text-readable files keep their existing context
+   * behavior, while binary attachments that have a registered parser are routed
+   * through document conversion.
+   *
+   * @param file - File being considered for context injection.
+   * @param fileParserManager - Parser manager used to validate extension support.
+   * @returns True when the file is a non-text attachment handled by conversion.
+   */
+  private isConvertedDocumentAttachment(
+    file: TFile,
+    fileParserManager: FileParserManager
+  ): boolean {
+    return !isTextReadableFile(file) && fileParserManager.supportsExtension(file.extension);
+  }
+
+  /**
+   * Convert a supported attachment and wrap the markdown output in a structured
+   * XML block that preserves source metadata for the downstream prompt.
+   *
+   * @param file - Source attachment being converted.
+   * @param vault - Obsidian vault used to read the file.
+   * @param fileParserManager - Parser manager responsible for conversion.
+   * @returns XML-wrapped converted content ready for prompt inclusion.
+   */
+  private async buildConvertedDocumentBlock(
+    file: TFile,
+    vault: Vault,
+    fileParserManager: FileParserManager
+  ): Promise<string> {
+    const parsedFile = await fileParserManager.parseFileWithMetadata(file, vault);
+    await this.maybeSaveConvertedDocumentOutput(file, vault, parsedFile);
+    const pageCount = parsedFile.metadata.pageCount ?? 0;
+
+    return [
+      `<${CONVERTED_DOCUMENT_TAG}`,
+      ` source="${escapeXml(parsedFile.metadata.sourceFilename)}"`,
+      ` type="${escapeXml(parsedFile.metadata.sourceFormat)}"`,
+      ` pages="${escapeXml(pageCount.toString())}"`,
+      ` words="${escapeXml(parsedFile.metadata.wordCount.toString())}">`,
+      `\n${escapeXml(parsedFile.content)}\n`,
+      `</${CONVERTED_DOCUMENT_TAG}>`,
+    ].join("");
+  }
+
+  /**
+   * Read transient save-to-vault options attached to a context file.
+   *
+   * The chat UI can augment `TFile` instances with these flags when a user opts
+   * into persisting a converted attachment. Regular context files do not set
+   * them, so the default behavior remains unchanged.
+   *
+   * @param file - Context file that may carry converted-document save options.
+   * @returns Per-file save preferences used by the converted-document pipeline.
+   */
+  private getConvertedDocumentContextOptions(file: TFile): ConvertedDocumentContextOptions {
+    const contextFile = file as ConvertedDocumentContextFile;
+    return {
+      saveConvertedOutput: contextFile.saveConvertedOutput === true,
+      convertedDocOutputFolder: contextFile.convertedDocOutputFolder,
+    };
+  }
+
+  /**
+   * Persist converted markdown only when the caller explicitly opted into
+   * saving the converted attachment back to the vault.
+   *
+   * @param file - Original source file attached to the chat context.
+   * @param vault - Obsidian vault used for persistence.
+   * @param parsedFile - Converted markdown plus metadata emitted by the parser.
+   */
+  private async maybeSaveConvertedDocumentOutput(
+    file: TFile,
+    vault: Vault,
+    parsedFile: ParsedFileResult
+  ): Promise<void> {
+    const { saveConvertedOutput, convertedDocOutputFolder } =
+      this.getConvertedDocumentContextOptions(file);
+    if (!saveConvertedOutput) {
+      return;
+    }
+
+    await saveConvertedDocOutput(
+      file,
+      parsedFile.content,
+      vault,
+      convertedDocOutputFolder,
+      parsedFile.metadata
+    );
   }
 
   async processEmbeddedPDFs(
@@ -334,6 +461,13 @@ export class ContextProcessor {
     }
 
     if (resolvedFile.extension !== "md") {
+      if (
+        isPlusChain(chainType) &&
+        this.isConvertedDocumentAttachment(resolvedFile, fileParserManager)
+      ) {
+        return await this.buildConvertedDocumentBlock(resolvedFile, vault, fileParserManager);
+      }
+
       return rawMatch;
     }
 
@@ -566,7 +700,9 @@ export class ContextProcessor {
         const content =
           note.extension === "md"
             ? await this.buildMarkdownContextContent(note, vault, fileParserManager, currentChain)
-            : await fileParserManager.parseFile(note, vault);
+            : this.isConvertedDocumentAttachment(note, fileParserManager)
+              ? await this.buildConvertedDocumentBlock(note, vault, fileParserManager)
+              : await fileParserManager.parseFile(note, vault);
 
         // Get file metadata
         const stats = await vault.adapter.stat(note.path);
@@ -576,6 +712,12 @@ export class ContextProcessor {
         additionalContext += `\n\n<${prompt_tag}>\n<title>${escapeXml(note.basename)}</title>\n<path>${note.path}</path>\n<ctime>${ctime}</ctime>\n<mtime>${mtime}</mtime>\n<content>\n${content}\n</content>\n</${prompt_tag}>`;
       } catch (error) {
         logError(`Error processing file ${note.path}:`, error);
+        if (
+          this.isConvertedDocumentAttachment(note, fileParserManager) &&
+          isConversionErrorLike(error)
+        ) {
+          throw error;
+        }
         additionalContext += `\n\n<${prompt_tag}_error>\n<title>${escapeXml(note.basename)}</title>\n<path>${note.path}</path>\n<error>[Error: Could not process file]</error>\n</${prompt_tag}_error>`;
       }
     };

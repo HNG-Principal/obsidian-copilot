@@ -61,10 +61,12 @@ describe("toolExecution", () => {
         [testTool]
       );
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: "testTool",
         result: "Tool executed successfully",
         success: true,
+        status: "completed",
+        approvedBy: "auto",
       });
       expect(mockCheckIsPlusUser).not.toHaveBeenCalled();
     });
@@ -93,10 +95,11 @@ describe("toolExecution", () => {
 
       const result = await executeSequentialToolCall({ name: "plusTool", args: {} }, [plusTool]);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: "plusTool",
         result: "Error: plusTool requires a Copilot Plus subscription",
         success: false,
+        status: "failed",
       });
       expect(mockCallTool).not.toHaveBeenCalled();
     });
@@ -126,10 +129,12 @@ describe("toolExecution", () => {
 
       const result = await executeSequentialToolCall({ name: "plusTool", args: {} }, [plusTool]);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: "plusTool",
         result: "Plus tool executed",
         success: true,
+        status: "completed",
+        approvedBy: "auto",
       });
       expect(mockCheckIsPlusUser).toHaveBeenCalled();
       expect(mockCallTool).toHaveBeenCalled();
@@ -138,21 +143,23 @@ describe("toolExecution", () => {
     it("should handle tool not found", async () => {
       const result = await executeSequentialToolCall({ name: "unknownTool", args: {} }, []);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: "unknownTool",
         result:
           "Error: Tool 'unknownTool' not found. Available tools: . Make sure you have the tool enabled in the Agent settings.",
         success: false,
+        status: "failed",
       });
     });
 
     it("should handle invalid tool call", async () => {
       const result = await executeSequentialToolCall(null as any, []);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: "unknown",
         result: "Error: Invalid tool call - missing tool name",
         success: false,
+        status: "failed",
       });
     });
 
@@ -184,6 +191,43 @@ describe("toolExecution", () => {
 
       expect(result.success).toBe(true);
       expect(mockCallTool).toHaveBeenCalled();
+    });
+
+    it("should reject approval-required tools when user rejects execution", async () => {
+      const guardedTool = createLangChainTool({
+        name: "guardedTool",
+        description: "Approval tool",
+        schema: z.object({ input: z.string() }),
+        func: async () => "Should not execute",
+      });
+
+      ToolRegistry.getInstance().register({
+        tool: guardedTool,
+        metadata: {
+          id: "guardedTool",
+          displayName: "Guarded Tool",
+          description: "Approval tool",
+          category: "custom",
+          approvalCategory: "confirm",
+        },
+      });
+
+      const result = await executeSequentialToolCall(
+        { name: "guardedTool", args: { input: "test" } },
+        [guardedTool],
+        undefined,
+        {
+          requireToolApproval: true,
+          onApprovalRequest: async () => false,
+        }
+      );
+
+      expect(result).toMatchObject({
+        toolName: "guardedTool",
+        success: false,
+        status: "rejected",
+      });
+      expect(mockCallTool).not.toHaveBeenCalled();
     });
   });
 });
