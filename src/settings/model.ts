@@ -169,7 +169,10 @@ export interface CopilotSettings {
   /** Whether we have suggested built-in default commands to the user once. */
   suggestedDefaultCommands: boolean;
   autonomousAgentMaxIterations: number;
+  maxAgentTurns: number;
+  requireToolApproval: boolean;
   autonomousAgentEnabledToolIds: string[];
+  enabledTools: string[];
   /** Default reasoning effort for models that support it (GPT-5, O-series, etc.) */
   reasoningEffort: "minimal" | "low" | "medium" | "high";
   /** Default verbosity level for models that support it */
@@ -284,7 +287,25 @@ async function handleEmbeddingModelKeyChange(
  */
 export function setSettings(settings: Partial<CopilotSettings>) {
   const previousSettings = getSettings();
-  const newSettings = mergeAllActiveModelsWithCoreModels({ ...previousSettings, ...settings });
+  const mergedSettings = { ...previousSettings, ...settings };
+
+  if (settings.enabledTools && !settings.autonomousAgentEnabledToolIds) {
+    mergedSettings.autonomousAgentEnabledToolIds = settings.enabledTools;
+  }
+
+  if (settings.autonomousAgentEnabledToolIds && !settings.enabledTools) {
+    mergedSettings.enabledTools = settings.autonomousAgentEnabledToolIds;
+  }
+
+  if (settings.maxAgentTurns !== undefined && settings.autonomousAgentMaxIterations === undefined) {
+    mergedSettings.autonomousAgentMaxIterations = settings.maxAgentTurns;
+  }
+
+  if (settings.autonomousAgentMaxIterations !== undefined && settings.maxAgentTurns === undefined) {
+    mergedSettings.maxAgentTurns = settings.autonomousAgentMaxIterations;
+  }
+
+  const newSettings = mergeAllActiveModelsWithCoreModels(mergedSettings);
   newSettings.embeddingModelKey = resolveEmbeddingModelKey(newSettings);
   settingsStore.set(settingsAtom, newSettings);
   void handleEmbeddingModelKeyChange(previousSettings, newSettings);
@@ -552,10 +573,25 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.autonomousAgentMaxIterations = autonomousAgentMaxIterations;
   }
 
+  const maxAgentTurns = Number(settingsToSanitize.maxAgentTurns);
+  if (isNaN(maxAgentTurns) || maxAgentTurns < 1 || maxAgentTurns > 25) {
+    sanitizedSettings.maxAgentTurns = sanitizedSettings.autonomousAgentMaxIterations;
+  } else {
+    sanitizedSettings.maxAgentTurns = maxAgentTurns;
+  }
+
+  if (typeof sanitizedSettings.requireToolApproval !== "boolean") {
+    sanitizedSettings.requireToolApproval = DEFAULT_SETTINGS.requireToolApproval;
+  }
+
   // Ensure autonomousAgentEnabledToolIds is an array
   if (!Array.isArray(sanitizedSettings.autonomousAgentEnabledToolIds)) {
     sanitizedSettings.autonomousAgentEnabledToolIds =
       DEFAULT_SETTINGS.autonomousAgentEnabledToolIds;
+  }
+
+  if (!Array.isArray(sanitizedSettings.enabledTools)) {
+    sanitizedSettings.enabledTools = sanitizedSettings.autonomousAgentEnabledToolIds;
   }
 
   // Migration: rename legacy tool IDs to their new names
@@ -565,6 +601,16 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   };
   sanitizedSettings.autonomousAgentEnabledToolIds =
     sanitizedSettings.autonomousAgentEnabledToolIds.map((id) => toolIdRenames[id] ?? id);
+  sanitizedSettings.enabledTools = sanitizedSettings.enabledTools.map(
+    (id) => toolIdRenames[id] ?? id
+  );
+
+  if (sanitizedSettings.enabledTools.length === 0) {
+    sanitizedSettings.enabledTools = sanitizedSettings.autonomousAgentEnabledToolIds;
+  }
+
+  sanitizedSettings.autonomousAgentEnabledToolIds = sanitizedSettings.enabledTools;
+  sanitizedSettings.autonomousAgentMaxIterations = sanitizedSettings.maxAgentTurns;
 
   // Ensure memoryFolderName has a default value
   if (
