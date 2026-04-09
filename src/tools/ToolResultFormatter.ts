@@ -493,7 +493,15 @@ export class ToolResultFormatter {
 
       for (const videoResult of parsed.results) {
         if (videoResult.success) {
-          output.push(`📹 Video: ${videoResult.url}`);
+          output.push(`📹 Video: ${videoResult.title || videoResult.url}`);
+          output.push(`🔗 ${videoResult.url}`);
+          if (videoResult.provider || videoResult.extractionMethod || videoResult.cacheStatus) {
+            output.push(
+              [videoResult.provider, videoResult.extractionMethod, videoResult.cacheStatus]
+                .filter(Boolean)
+                .join(" • ")
+            );
+          }
           output.push("");
 
           // Format transcript

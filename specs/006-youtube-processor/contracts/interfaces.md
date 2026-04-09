@@ -11,55 +11,91 @@
 ```typescript
 interface IYouTubeExtractor {
   /**
-   * Fetch and process a YouTube video's transcript.
-   * @param url - YouTube video URL
-   * @param options - Extraction options
-   * @returns Video metadata + formatted transcript
+   * Resolve a YouTube URL into normalized metadata and transcript content.
    */
   extractTranscript(
     url: string,
     options?: YouTubeExtractionOptions
-  ): Promise<{
-    video: YouTubeVideo;
-    transcript: VideoTranscript;
-  }>;
+  ): Promise<YouTubeExtractionResult>;
 }
 
 interface YouTubeExtractionOptions {
-  /** Preferred language code (ISO 639-1) */
   preferredLanguage?: string;
-  /** Skip cache */
   bypassCache?: boolean;
-  /** Include timestamps in formatted output */
   includeTimestamps?: boolean;
+  includeChapters?: boolean;
+  allowAudioFallback?: boolean;
+}
+
+interface YouTubeExtractionResult {
+  parsedUrl: ParsedYouTubeUrl;
+  video: YouTubeVideo;
+  transcript: VideoTranscript;
+  cacheStatus: "hit" | "miss" | "refresh";
 }
 ```
 
-### ITranscriptProcessor
+### IYouTubeTranscriptProvider
 
 ```typescript
-interface ITranscriptProcessor {
-  /**
-   * Format raw transcript segments into readable markdown.
-   * Pure function: no side effects.
-   */
-  formatTranscript(
-    segments: TranscriptSegment[],
-    chapters?: VideoChapter[],
-    options?: FormatOptions
-  ): string;
+interface IYouTubeTranscriptProvider {
+  readonly id: string;
 
   /**
-   * Parse chapter information from video description.
-   * Pure function: description string → chapters.
+   * Returns true when this provider can attempt extraction in the current environment.
    */
-  parseChapters(description: string): VideoChapter[];
+  canHandle(request: YouTubeProviderRequest): Promise<boolean>;
+
+  /**
+   * Fetch captions and metadata for a YouTube video.
+   */
+  fetchTranscript(request: YouTubeProviderRequest): Promise<ProviderTranscriptResult>;
 }
 
-interface FormatOptions {
-  /** Include [MM:SS] timestamps at paragraph breaks */
+interface YouTubeProviderRequest {
+  parsedUrl: ParsedYouTubeUrl;
+  preferredLanguage?: string;
+}
+
+interface ProviderTranscriptResult {
+  video: YouTubeVideo;
+  transcript: VideoTranscript;
+}
+```
+
+### IAudioTranscriptionProvider
+
+```typescript
+interface IAudioTranscriptionProvider {
+  readonly id: string;
+
+  /**
+   * Attempt transcription when no usable captions are available.
+   */
+  transcribeVideo(request: AudioTranscriptionRequest): Promise<ProviderTranscriptResult>;
+}
+
+interface AudioTranscriptionRequest {
+  parsedUrl: ParsedYouTubeUrl;
+  preferredLanguage?: string;
+}
+```
+
+### IYouTubeTranscriptFormatter
+
+```typescript
+interface IYouTubeTranscriptFormatter {
+  formatTranscript(
+    transcript: VideoTranscript,
+    chapters: VideoChapter[],
+    options: TranscriptFormattingOptions
+  ): string;
+
+  parseChapters(description?: string): VideoChapter[];
+}
+
+interface TranscriptFormattingOptions {
   includeTimestamps: boolean;
-  /** Insert chapter headings */
   includeChapters: boolean;
 }
 ```
@@ -68,100 +104,111 @@ interface FormatOptions {
 
 ```typescript
 interface IYouTubeCache {
-  /**
-   * Get cached transcript. Returns undefined if not cached or expired.
-   */
-  get(videoId: string, language: string): Promise<YouTubeCacheEntry | undefined>;
-
-  /**
-   * Store transcript in cache.
-   */
-  set(entry: YouTubeCacheEntry): Promise<void>;
-
-  /**
-   * Remove expired entries.
-   */
+  get(cacheKey: string): Promise<YouTubeTranscriptCacheEntry | undefined>;
+  set(entry: YouTubeTranscriptCacheEntry): Promise<void>;
   cleanup(): Promise<void>;
+}
+```
+
+### IYouTubeTranscriptNoteWriter
+
+```typescript
+interface IYouTubeTranscriptNoteWriter {
+  save(
+    video: YouTubeVideo,
+    transcript: VideoTranscript,
+    options: SaveTranscriptOptions
+  ): Promise<SavedTranscriptNote>;
+}
+
+interface SaveTranscriptOptions {
+  outputFolder: string;
+  includeSummary?: string;
+  overwriteExisting?: boolean;
 }
 ```
 
 ---
 
-## Pure Function Type Contracts
+## Pure Function Contracts
 
-### Parse Video ID
-
-```typescript
-/**
- * Extract YouTube video ID from various URL formats.
- * Handles: youtube.com/watch?v=, youtu.be/, youtube.com/shorts/, etc.
- * Returns undefined if not a valid YouTube URL.
- */
-type ParseVideoId = (url: string) => string | undefined;
-```
-
-### Merge Segments to Sentences
+### Parse YouTube URL
 
 ```typescript
-/**
- * Merge consecutive short transcript segments into complete sentences.
- * Uses punctuation and pause detection to determine sentence boundaries.
- */
-type MergeSegmentsToSentences = (
-  segments: TranscriptSegment[]
-) => Array<{ text: string; startTime: number; endTime: number }>;
+type ParseYouTubeUrl = (url: string) => ParsedYouTubeUrl | undefined;
 ```
 
 ### Format Timestamp
 
 ```typescript
-/**
- * Format seconds into [MM:SS] or [HH:MM:SS] display string.
- */
 type FormatTimestamp = (seconds: number) => string;
+```
+
+### Merge Transcript Segments
+
+```typescript
+type MergeTranscriptSegments = (
+  segments: TranscriptSegment[]
+) => Array<{ text: string; startTimeSeconds: number; endTimeSeconds: number | undefined }>;
 ```
 
 ---
 
 ## Settings Contract
 
-New settings in `CopilotSettings`:
+New settings expected in `CopilotSettings`:
 
-| Setting                       | Type      | Default | Range | Description                                |
-| ----------------------------- | --------- | ------- | ----- | ------------------------------------------ |
-| `preferredTranscriptLanguage` | `string`  | `'en'`  | —     | Preferred language for YouTube transcripts |
-| `youtubeTranscriptTimestamps` | `boolean` | `true`  | —     | Include timestamps in transcripts          |
+| Setting                          | Type                   | Default                 | Description                                          |
+| -------------------------------- | ---------------------- | ----------------------- | ---------------------------------------------------- |
+| `preferredTranscriptLanguage`    | `string`               | `"en"`                  | Preferred language code for transcript extraction    |
+| `youtubeTranscriptTimestamps`    | `boolean`              | `true`                  | Include timestamps in transcript output              |
+| `youtubeTranscriptOutputFolder`  | `string`               | `"YouTube Transcripts"` | Folder used when saving transcript notes             |
+| `youtubeTranscriptCacheTTLHours` | `number`               | `168`                   | Cache TTL for YouTube transcript entries             |
+| `audioTranscriptionProvider`     | `"disabled" \| string` | `"disabled"`            | Optional provider used when captions are unavailable |
 
 Existing settings reused:
 
-- `supadataApiKey` — for Supadata premium transcript backend
+- `supadataApiKey`
+- `enableSelfHostMode`
+- `plusLicenseKey`
 
 ---
 
 ## Context Integration Contract
 
+Feature 006 should preserve the existing top-level tag:
+
 ```xml
-<!-- YouTube transcript injected into context -->
-<youtube-transcript videoId="dQw4w9WgXcQ" title="Video Title" language="en" auto-generated="true">
-  ## Chapter: Introduction [00:00]
+<youtube_video_context>
+  <title>Video Title</title>
+  <url>https://www.youtube.com/watch?v=dQw4w9WgXcQ</url>
+  <video_id>dQw4w9WgXcQ</video_id>
+  <channel>Channel Name</channel>
+  <upload_date>2026-04-01</upload_date>
+  <duration>01:12:30</duration>
+  <content>
+  ## Introduction [00:00]
 
-  Welcome to this video about...
-
-  [02:15] The main topic we'll discuss today is...
-
-  ## Chapter: Deep Dive [05:30]
-
-  Let's explore this in detail...
-</youtube-transcript>
+  [00:42] Opening paragraph...
+  </content>
+</youtube_video_context>
 ```
+
+Rules:
+
+1. Inner values must be XML-escaped before insertion.
+2. Transcript markdown belongs inside `<content>`.
+3. Errors must be represented as `<error>...</error>` and omitted when the extraction succeeds.
+4. Existing context compactor and registry logic must continue to recognize the block as recoverable YouTube context.
 
 ---
 
 ## Event Hooks
 
-| Hook                  | Trigger                               | Handler                                                                           |
-| --------------------- | ------------------------------------- | --------------------------------------------------------------------------------- |
-| YouTube URL mentioned | User @-mentions or pastes YouTube URL | `Mention.processYoutubeUrl()` → `IYouTubeExtractor.extractTranscript()`           |
-| YouTube tool called   | Agent uses transcript tool            | `YoutubeTools.youtubeTranscriptionTool` → `IYouTubeExtractor.extractTranscript()` |
-| Transcript cached     | Successful extraction                 | `IYouTubeCache.set()`                                                             |
-| Context injection     | Message with YouTube context          | `ContextProcessor` wraps in `<youtube-transcript>` tags                           |
+| Hook                            | Trigger                                     | Handler                                                                  |
+| ------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------ |
+| YouTube URL pasted or mentioned | Chat input and mention processing           | `Mention.processYoutubeUrl()` -> `IYouTubeExtractor.extractTranscript()` |
+| YouTube tool invoked            | Agent tool execution                        | `youtubeTranscriptionTool` -> `IYouTubeExtractor.extractTranscript()`    |
+| Project context load            | Project YouTube URLs configured in settings | `ProjectManager.processYoutubeUrlContext()` -> extractor service         |
+| Transcript saved to cache       | Successful extraction                       | `IYouTubeCache.set()`                                                    |
+| Transcript saved to vault       | Explicit user action or command             | `IYouTubeTranscriptNoteWriter.save()`                                    |

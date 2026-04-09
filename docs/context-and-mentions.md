@@ -76,11 +76,13 @@ URL processing requires Copilot Plus. For regular web pages, Copilot fetches the
 
 Special cases:
 
-- YouTube URLs are handled specially — Copilot fetches the video transcript automatically.
+- YouTube URLs are handled specially — Copilot fetches the video transcript automatically, formats it into a structured video context block, and reuses a local transcript cache when possible.
 - X/Twitter post URLs use a social-post extractor so the post text, author, and post date are included as context.
 - PDF URLs are routed through the document conversion pipeline instead of generic web-page extraction.
 
 If a page is JavaScript-heavy and the raw fetch looks incomplete, Copilot can use the rendered content from an open Web Viewer tab as a fallback.
+
+For YouTube URLs, Copilot prefers the video's published captions, can request a preferred transcript language when one is available, and can fall back to alternate providers in self-host setups. If you later save the transcript from the YouTube transcript flow, the markdown note is written to your configured YouTube transcript output folder.
 
 ### Tool Mentions
 

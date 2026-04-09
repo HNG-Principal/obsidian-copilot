@@ -13,7 +13,7 @@ Copilot Plus is a subscription that enables:
 - **Autonomous agent mode** — AI that reasons step-by-step and uses tools automatically
 - **File editing tools** — Write to File and Replace in File for AI-driven note editing
 - **Web search** — Search the internet from chat
-- **YouTube transcription** — Fetch video transcripts and use them as context
+- **YouTube transcription** — Fetch video transcripts, cache them locally, and use them as context
 - **Memory system** — Persistent memory across conversations
 - **Copilot Plus Flash model** — A built-in model that requires no separate API key
 - **URL processing** — Fetch and summarize web pages as context
@@ -140,6 +140,16 @@ Use your own Supadata API key for YouTube transcript extraction:
 
 - Get a key at supadata.ai
 - Enter it in **Settings → Copilot → Plus → Supadata API Key**
+
+Additional YouTube transcript settings:
+
+- **Preferred Transcript Language** — Requests that language first when the provider offers it
+- **Include YouTube Transcript Timestamps** — Controls whether saved and inserted transcript output includes timestamp markers
+- **YouTube Transcript Output Folder** — Where transcript markdown notes are saved when you use the save flow
+- **YouTube Transcript Cache TTL (hours)** — How long cached transcript results remain valid in `.copilot/youtube-cache`
+- **Audio Transcription Fallback Provider** — Lets self-host users choose a fallback provider for videos that do not expose captions
+
+In self-host mode, Copilot still tries the most direct transcript source first. If captions are unavailable, it can fall back to the configured alternate provider instead of failing immediately.
 
 ---
 

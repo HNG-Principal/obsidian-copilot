@@ -6,111 +6,103 @@
 
 ## Implementation Order
 
-### Step 1: Types and Video ID Parser
+### Step 1: Consolidate Shared Types and URL Parsing
 
-Define types in `youtubeExtractor.ts` (or a separate types file):
+Create a shared YouTube types module and a single pure URL parser.
 
-- `YouTubeVideo`, `VideoChapter`, `VideoTranscript`, `TranscriptSegment`, `YouTubeCacheEntry`
-- `parseVideoId(url)`: extract video ID from all YouTube URL formats
-- Unit tests for URL parsing (standard, short, shorts, embed, with params)
+- Add `ParsedYouTubeUrl`, `YouTubeVideo`, `VideoTranscript`, `TranscriptSegment`, and cache types.
+- Replace duplicated URL parsing logic with a shared `parseYouTubeUrl()` helper.
+- Add targeted tests for standard watch URLs, short URLs, embed URLs, shorts URLs, and timestamp parameters.
 
-### Step 2: Transcript Processor (Pure Logic)
+### Step 2: Add Transcript Provider and Cache Layers
 
-Create `src/services/transcriptProcessor.ts`:
+Create the orchestration surface that every caller will use.
 
-- `mergeSegmentsToSentences(segments)`: combine short segments into sentences
-- `parseChapters(description)`: regex-based chapter extraction from description
-- `formatTranscript(segments, chapters, options)`: full formatting pipeline
-  - Group into paragraphs (pause detection)
-  - Insert chapter headings
-  - Add timestamp markers at paragraph breaks
-  - Return clean markdown
-- Unit tests with sample transcript data
+- Add `src/services/youtubeTranscriptProvider.ts` for provider selection.
+- Add `src/cache/youtubeCache.ts` following the `pdfCache.ts` and `urlCache.ts` patterns.
+- Reuse existing Brevilabs and Supadata code paths behind the provider contract.
+- Reuse the Web Viewer DOM transcript extractor when a matching active YouTube tab is available.
 
-### Step 3: YouTube Cache
+### Step 3: Add Pure Transcript Formatting and Chapter Parsing
 
-Create `src/cache/youtubeCache.ts`:
+Create a pure formatter module for readable transcript output.
 
-- Follow `pdfCache.ts` pattern
-- Key: `{videoId}_{language}`
-- Storage: `.copilot/youtube-cache/`
-- TTL: 7 days by default
-- `get()`, `set()`, `cleanup()` methods
+- Add `parseYouTubeChapters(description)`.
+- Add timestamp formatting helpers.
+- Add paragraph grouping and chapter insertion.
+- Return both `plainText` and `formattedMarkdown` outputs for different consumers.
 
-### Step 4: YouTube Extractor
+### Step 4: Wire Tool, Mention, and Project Context Flows
 
-Create `src/services/youtubeExtractor.ts`:
+Replace direct transcript calls with the shared extractor.
 
-- `extractTranscript(url, options): Promise<{video, transcript}>`
-- Primary: use `youtube-transcript` library for public caption fetching
-- Fallback: Supadata API when `supadataApiKey` configured
-- Fetch available languages, select based on user preference
-- Parse video metadata (title, channel) from page data
-- Cache successful extractions
+- Update `src/tools/YoutubeTools.ts` to call `YouTubeExtractor.extractTranscript()`.
+- Update `src/mentions/Mention.ts` to route `processYoutubeUrl()` through the extractor.
+- Update `src/LLMProviders/projectManager.ts` to stop bypassing the shared service.
+- Preserve `youtube_video_context` compatibility for context compaction and recovery.
 
-### Step 5: Wire YouTube Tools
+### Step 5: Add Save-to-Vault Note Output
 
-Modify `src/tools/YoutubeTools.ts`:
+Implement transcript-specific note export.
 
-- Delegate `youtubeTranscriptionTool` to `youtubeExtractor.extractTranscript()`
-- Replace Brevilabs `youtube4llm()` calls
-- Format tool result for LLM consumption
+- Add a note writer service for transcript markdown.
+- Add a configurable transcript output folder setting.
+- Support overwrite or disambiguated file naming.
+- Update the existing YouTube transcript modal or command flow to use the new writer.
 
-### Step 6: Wire Mention Processing
+### Step 6: Add Configurable Audio Fallback Path
 
-Modify `src/mentions/Mention.ts`:
+Introduce the abstraction for no-caption scenarios.
 
-- Route `processYoutubeUrl()` through `youtubeExtractor.extractTranscript()`
-- Handle extraction errors gracefully (show inline error)
+- Add `audioTranscriptionProvider` setting and contract.
+- Attempt audio fallback only when enabled and configured.
+- Return progress/error messaging appropriate for longer-running transcription.
+- Keep the implementation remote-provider-based; do not add bundled binaries.
 
-### Step 7: Context Integration and Settings
+### Step 7: Finish Tests and Docs
 
-Modify `src/contextProcessor.ts`:
-
-- Wrap transcripts in `<youtube-transcript>` XML tags with metadata attributes
-
-Modify `src/settings/model.ts`:
-
-- Add `preferredTranscriptLanguage`, `youtubeTranscriptTimestamps`
+- Add extractor, formatter, cache, and integration tests.
+- Update user docs for YouTube URL mentions, tool behavior, and provider configuration.
+- Run `npm run lint`, `npm run test`, and `npm run build` before completion.
 
 ---
 
 ## Prerequisites
 
-- Install `youtube-transcript` (or equivalent) as dependency
-- Verify library bundles with esbuild
-- Existing `YoutubeTools.ts` and `Mention.ts` functional
+- Existing YouTube entry points remain available in `Mention`, `YoutubeTools`, and project context loading.
+- Existing provider credentials may be present for Brevilabs and Supadata.
+- The implementation must stay compatible with the Obsidian plugin runtime and existing context block tags.
 
 ---
 
 ## Verification Checklist
 
-- [ ] Standard YouTube URL extracts transcript
-- [ ] Short URL (youtu.be) extracts transcript
-- [ ] Auto-generated captions extracted and formatted
-- [ ] Manual captions preferred over auto-generated
-- [ ] Chapter detection from video description works
-- [ ] Chapters appear as headings in formatted transcript
-- [ ] Timestamps appear at paragraph breaks
-- [ ] Language preference selects correct transcript
-- [ ] Fallback to available language when preferred not available
-- [ ] Cache prevents redundant fetches
-- [ ] Expired cache triggers fresh fetch
-- [ ] Video without captions returns clear error
-- [ ] @mention YouTube URL shows transcript in context
-- [ ] YouTube tool in agent mode returns transcript
-- [ ] All pure functions have passing unit tests
+- [ ] Standard watch URLs extract transcripts correctly.
+- [ ] `youtu.be`, `shorts`, and embed URLs normalize to the same video identity.
+- [ ] Cache hits return previously formatted transcripts without a new provider call.
+- [ ] Transcript formatting includes stable timestamps and readable paragraphs.
+- [ ] Description-based chapters become transcript headings when available.
+- [ ] Mention processing injects a recoverable `youtube_video_context` block.
+- [ ] Agent tool execution returns transcript output without using direct provider calls in the tool body.
+- [ ] Project YouTube context loading uses the shared extractor service.
+- [ ] Transcript note export creates a markdown file in the configured output folder.
+- [ ] Duplicate saves either overwrite intentionally or create a disambiguated path.
+- [ ] No-caption videos produce either a configured fallback transcription or a clear error.
+- [ ] Non-English videos respect preferred language selection when a provider supports it.
 
 ---
 
 ## Key Files Reference
 
-| File                                  | Purpose                             |
-| ------------------------------------- | ----------------------------------- |
-| `src/services/youtubeExtractor.ts`    | Transcript fetching (new)           |
-| `src/services/transcriptProcessor.ts` | Transcript formatting (new)         |
-| `src/cache/youtubeCache.ts`           | Transcript caching (new)            |
-| `src/tools/YoutubeTools.ts`           | YouTube tool integration (modified) |
-| `src/mentions/Mention.ts`             | @mention URL processing (modified)  |
-| `src/contextProcessor.ts`             | Context XML wrapping (modified)     |
-| `src/settings/model.ts`               | YouTube settings (modified)         |
+| File                                               | Purpose                                        |
+| -------------------------------------------------- | ---------------------------------------------- |
+| `src/services/youtubeExtractor.ts`                 | Shared extraction facade                       |
+| `src/services/youtubeTranscriptProvider.ts`        | Provider selection and normalization           |
+| `src/services/youtubeTranscriptFormatter.ts`       | Pure transcript formatting and chapter parsing |
+| `src/cache/youtubeCache.ts`                        | Disk cache for transcript payloads             |
+| `src/tools/YoutubeTools.ts`                        | Tool integration                               |
+| `src/mentions/Mention.ts`                          | Mention and pasted-URL integration             |
+| `src/LLMProviders/projectManager.ts`               | Project context loading integration            |
+| `src/contextProcessor.ts`                          | YouTube context block formatting               |
+| `src/components/modals/YoutubeTranscriptModal.tsx` | User-facing export flow                        |
+| `src/settings/model.ts`                            | YouTube settings additions                     |

@@ -46,6 +46,20 @@ type ConvertedDocumentContextFile = TFile & ConvertedDocumentContextOptions;
 const CONVERTED_DOCUMENT_TAG = "converted-document";
 const DEFAULT_WEB_CONTENT_CONTEXT_CHARS = 12000;
 
+interface YouTubeContextBlockOptions {
+  title: string;
+  url: string;
+  videoId: string;
+  channel?: string;
+  description?: string;
+  uploadDate?: string;
+  duration?: string;
+  genre?: string;
+  transcript?: string;
+  error?: string;
+  isActive?: boolean;
+}
+
 /**
  * Build a `<web-content>` prompt block and truncate oversized content when needed.
  */
@@ -64,6 +78,56 @@ export function buildWebContentContextBlock(
       `${parsedUrl.content.slice(0, maxContentChars).trimEnd()}\n\n` +
       "[Content truncated to fit the context window.]",
   });
+}
+
+/**
+ * Build a YouTube video context XML block.
+ * All content is escaped to avoid XML and prompt injection.
+ *
+ * @param options - YouTube context block fields.
+ * @returns Serialized XML context block.
+ */
+export function buildYouTubeContextBlock(options: YouTubeContextBlockOptions): string {
+  const parts = [
+    `\n\n<${YOUTUBE_VIDEO_CONTEXT_TAG}>`,
+    `\n<title>${escapeXml(options.title)}</title>`,
+    `\n<url>${escapeXml(options.url)}</url>`,
+    `\n<video_id>${escapeXml(options.videoId)}</video_id>`,
+  ];
+
+  if (options.isActive) {
+    parts.push(`\n<is_active>true</is_active>`);
+  }
+
+  if (options.channel) {
+    parts.push(`\n<channel>${escapeXml(options.channel)}</channel>`);
+  }
+
+  if (options.uploadDate) {
+    parts.push(`\n<upload_date>${escapeXml(options.uploadDate)}</upload_date>`);
+  }
+
+  if (options.duration) {
+    parts.push(`\n<duration>${escapeXml(options.duration)}</duration>`);
+  }
+
+  if (options.genre) {
+    parts.push(`\n<genre>${escapeXml(options.genre)}</genre>`);
+  }
+
+  if (options.description) {
+    parts.push(`\n<description>${escapeXml(options.description)}</description>`);
+  }
+
+  if (options.error) {
+    parts.push(`\n<error>${escapeXml(options.error)}</error>`);
+  }
+
+  parts.push(
+    `\n<content>\n${escapeXml(options.transcript || "No transcript available for this video")}\n</content>`
+  );
+  parts.push(`\n</${YOUTUBE_VIDEO_CONTEXT_TAG}>`);
+  return parts.join("");
 }
 
 export class ContextProcessor {
@@ -870,67 +934,6 @@ export class ContextProcessor {
       return parts.join("");
     };
 
-    /**
-     * Build a YouTube video context XML block.
-     * All content is properly escaped to prevent XML/prompt injection.
-     */
-    const buildYouTubeBlock = (options: {
-      title: string;
-      url: string;
-      videoId: string;
-      channel?: string;
-      description?: string;
-      uploadDate?: string;
-      duration?: string;
-      genre?: string;
-      transcript?: string;
-      error?: string;
-      isActive?: boolean;
-    }): string => {
-      const parts = [
-        `\n\n<${YOUTUBE_VIDEO_CONTEXT_TAG}>`,
-        `\n<title>${escapeXml(options.title)}</title>`,
-        `\n<url>${escapeXml(options.url)}</url>`,
-        `\n<video_id>${escapeXml(options.videoId)}</video_id>`,
-      ];
-
-      if (options.isActive) {
-        parts.push(`\n<is_active>true</is_active>`);
-      }
-
-      if (options.channel) {
-        parts.push(`\n<channel>${escapeXml(options.channel)}</channel>`);
-      }
-
-      if (options.uploadDate) {
-        parts.push(`\n<upload_date>${escapeXml(options.uploadDate)}</upload_date>`);
-      }
-
-      if (options.duration) {
-        parts.push(`\n<duration>${escapeXml(options.duration)}</duration>`);
-      }
-
-      if (options.genre) {
-        parts.push(`\n<genre>${escapeXml(options.genre)}</genre>`);
-      }
-
-      if (options.description) {
-        parts.push(`\n<description>${escapeXml(options.description)}</description>`);
-      }
-
-      // Error for real failures (tab closed, extraction failed, etc.)
-      if (options.error) {
-        parts.push(`\n<error>${escapeXml(options.error)}</error>`);
-      }
-
-      // Content: transcript if available, otherwise a message
-      const content = options.transcript || "No transcript available for this video";
-      parts.push(`\n<content>\n${escapeXml(content)}\n</content>`);
-
-      parts.push(`\n</${YOUTUBE_VIDEO_CONTEXT_TAG}>`);
-      return parts.join("");
-    };
-
     // Separate active tab from normal tabs and deduplicate by URL (and videoId for YouTube)
     let activeTab: { url: string; title?: string; faviconUrl?: string } | null = null;
     const normalTabs: Array<{ url: string; title?: string; faviconUrl?: string }> = [];
@@ -1125,7 +1128,7 @@ export class ContextProcessor {
         }
 
         if (!leaf) {
-          return buildYouTubeBlock({
+          return buildYouTubeContextBlock({
             title: tab.title || "YouTube Video",
             url: tab.url,
             videoId,
@@ -1145,7 +1148,7 @@ export class ContextProcessor {
             await service.waitForWebviewReady(leaf, WEBVIEW_READY_TIMEOUT_MS);
           } catch (err) {
             logWarn(`YouTube tab content not loaded yet for ${actualUrl}:`, err);
-            return buildYouTubeBlock({
+            return buildYouTubeContextBlock({
               title: tab.title || "YouTube Video",
               url: actualUrl,
               videoId,
@@ -1166,7 +1169,7 @@ export class ContextProcessor {
             ? result.transcript.map((seg) => `${seg.timestamp}: ${seg.text}`).join("\n")
             : undefined;
 
-        return buildYouTubeBlock({
+        return buildYouTubeContextBlock({
           title: result.title || tab.title || "YouTube Video",
           url: actualUrl,
           videoId: result.videoId,
@@ -1181,7 +1184,7 @@ export class ContextProcessor {
       } catch (err) {
         logWarn(`YouTube transcript extraction failed for ${tab.url}:`, err);
 
-        return buildYouTubeBlock({
+        return buildYouTubeContextBlock({
           title: tab.title || "YouTube Video",
           url: tab.url,
           videoId,

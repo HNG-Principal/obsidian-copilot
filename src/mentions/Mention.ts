@@ -1,14 +1,12 @@
 import { ImageProcessor } from "@/imageProcessing/imageProcessor";
-import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
-import { selfHostYoutube4llm } from "@/LLMProviders/selfHostServices";
-import { buildWebContentContextBlock } from "@/contextProcessor";
-import { err2String, isTwitterUrl, isYoutubeUrl } from "@/utils";
 import { logError } from "@/logger";
-import { isSelfHostModeValid } from "@/plusUtils";
+import { buildWebContentContextBlock, buildYouTubeContextBlock } from "@/contextProcessor";
 import { SocialMediaExtractor } from "@/services/socialMediaExtractor";
+import { formatYouTubeTimestamp } from "@/services/youtubeTranscriptFormatter";
+import { YouTubeExtractor } from "@/services/youtubeExtractor";
 import { WebExtractor } from "@/services/webExtractor";
 import type { ParsedURL } from "@/services/webContextTypes";
-import { getSettings } from "@/settings/model";
+import { err2String, isTwitterUrl, isYoutubeUrl } from "@/utils";
 
 export interface MentionData {
   type: string;
@@ -21,15 +19,15 @@ export interface MentionData {
 export class Mention {
   private static instance: Mention;
   private mentions: Map<string, MentionData>;
-  private brevilabsClient: BrevilabsClient;
   private webExtractor: WebExtractor;
   private socialMediaExtractor: SocialMediaExtractor;
+  private youtubeExtractor: YouTubeExtractor;
 
   private constructor() {
     this.mentions = new Map();
-    this.brevilabsClient = BrevilabsClient.getInstance();
     this.webExtractor = WebExtractor.getInstance();
     this.socialMediaExtractor = SocialMediaExtractor.getInstance();
+    this.youtubeExtractor = YouTubeExtractor.getInstance();
   }
 
   static getInstance(): Mention {
@@ -71,17 +69,36 @@ export class Mention {
     }
   }
 
-  async processYoutubeUrl(url: string): Promise<{ transcript: string; error?: string }> {
+  async processYoutubeUrl(url: string): Promise<{ context: string; error?: string }> {
     try {
-      const response =
-        isSelfHostModeValid() && getSettings().supadataApiKey
-          ? await selfHostYoutube4llm(url)
-          : await this.brevilabsClient.youtube4llm(url);
-      return { transcript: response.response.transcript };
+      const response = await this.youtubeExtractor.extractTranscript(url);
+      return {
+        context: buildYouTubeContextBlock({
+          title: response.video.title,
+          url: response.video.url,
+          videoId: response.video.videoId,
+          channel: response.video.channelName,
+          description: response.video.description,
+          uploadDate: response.video.publicationDate,
+          duration:
+            response.video.durationSeconds != null
+              ? formatYouTubeTimestamp(response.video.durationSeconds)
+              : undefined,
+          transcript: response.transcript.formattedMarkdown || response.transcript.plainText,
+        }),
+      };
     } catch (error) {
       const msg = err2String(error);
       logError(`Error processing YouTube URL ${url}: ${msg}`);
-      return { transcript: "", error: msg };
+      return {
+        context: buildYouTubeContextBlock({
+          title: "YouTube video",
+          url,
+          videoId: "unknown",
+          error: msg,
+        }),
+        error: msg,
+      };
     }
   }
 
@@ -144,7 +161,7 @@ export class Mention {
           this.mentions.set(url, {
             type: "youtube",
             original: url,
-            processed: processed.transcript,
+            processed: processed.context,
             error: processed.error,
           });
         }
@@ -202,7 +219,7 @@ export class Mention {
 
       if (urlData.processed) {
         if (result.type === "youtube") {
-          urlContext += `\n\n<youtube_video_context>\n<url>${urlData.original}</url>\n<content>\n${urlData.processed}\n</content>\n</youtube_video_context>`;
+          urlContext += urlData.processed;
         } else if (result.type === "twitter") {
           urlContext += `\n\n<twitter_content>\n<url>${urlData.original}</url>\n<content>\n${urlData.processed}\n</content>\n</twitter_content>`;
         } else {

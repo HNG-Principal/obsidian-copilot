@@ -150,8 +150,11 @@ Hands generated content off to the Wiki Writer plugin so you can save it as a st
 Fetches the transcript of a YouTube video.
 
 - **Trigger**: Automatically when you paste a YouTube URL in your message
+- **What Copilot returns**: The transcript is normalized into structured video context with title, URL, language, extraction source, and transcript text
+- **Built-in behavior**: Copilot prefers captions first, caches processed transcripts locally, and can reuse them across chats until the cache expires
 - **No extra setup needed**: Just include the URL in your message
-- **Self-host option**: Use your own Supadata API key for transcription in self-host mode
+- **Optional settings**: You can choose a preferred transcript language, include or hide timestamps, set the transcript cache TTL, and choose where saved transcript notes go in your vault
+- **Self-host option**: In self-host mode, Copilot can use your Supadata API key and optional audio-transcription fallback provider when captions are unavailable
 
 ---
 

@@ -199,6 +199,33 @@ Just content, no path or modified date
     });
   });
 
+  describe("formatYoutubeTranscription", () => {
+    it("shows YouTube transcript titles and provider metadata", () => {
+      const formatted = ToolResultFormatter.format(
+        "youtubeTranscription",
+        JSON.stringify({
+          success: true,
+          total_urls: 1,
+          results: [
+            {
+              success: true,
+              url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              title: "Never Gonna Give You Up",
+              provider: "brevilabs",
+              extractionMethod: "captions",
+              cacheStatus: "miss",
+              transcript: "[00:00] Intro line\nSecond line",
+            },
+          ],
+        })
+      );
+
+      expect(formatted).toContain("📹 Video: Never Gonna Give You Up");
+      expect(formatted).toContain("🔗 https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+      expect(formatted).toContain("brevilabs • captions • miss");
+    });
+  });
+
   describe("formatReadNote", () => {
     it("returns a success summary without exposing content", () => {
       const payload = JSON.stringify({

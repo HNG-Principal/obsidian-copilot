@@ -17,6 +17,7 @@ export const DEFAULT_CUSTOM_PROMPTS_FOLDER = `${COPILOT_FOLDER_ROOT}/copilot-cus
 export const DEFAULT_MEMORY_FOLDER = `${COPILOT_FOLDER_ROOT}/memory`;
 export const DEFAULT_SYSTEM_PROMPTS_FOLDER = `${COPILOT_FOLDER_ROOT}/system-prompts`;
 export const DEFAULT_CONVERTED_DOC_OUTPUT_FOLDER = "";
+export const DEFAULT_YOUTUBE_TRANSCRIPT_OUTPUT_FOLDER = "YouTube Transcripts";
 export const DEFAULT_QA_EXCLUSIONS_SETTING = COPILOT_FOLDER_ROOT;
 export const DEFAULT_SYSTEM_PROMPT = `You are Obsidian Copilot, a helpful assistant that integrates AI to Obsidian note-taking.
   1. Never mention that you do not have access to something. Always rely on the user provided context.
@@ -977,6 +978,11 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   maxUrlCacheEntries: 100,
   urlExtractionTimeoutMs: 10000,
   supadataApiKey: "",
+  preferredTranscriptLanguage: "en",
+  youtubeTranscriptTimestamps: true,
+  youtubeTranscriptOutputFolder: DEFAULT_YOUTUBE_TRANSCRIPT_OUTPUT_FOLDER,
+  youtubeTranscriptCacheTTLHours: 168,
+  audioTranscriptionProvider: "brevilabs",
   enableLexicalBoosts: true,
   hybridSearchTextWeight: 0.3,
   enableReranking: true,

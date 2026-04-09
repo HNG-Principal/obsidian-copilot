@@ -162,6 +162,16 @@ export interface CopilotSettings {
   urlExtractionTimeoutMs: number;
   /** Supadata API key for self-host YouTube transcripts */
   supadataApiKey: string;
+  /** Preferred language code for YouTube transcript extraction */
+  preferredTranscriptLanguage: string;
+  /** Include timestamps in formatted YouTube transcript output */
+  youtubeTranscriptTimestamps: boolean;
+  /** Folder where exported YouTube transcript notes are saved */
+  youtubeTranscriptOutputFolder: string;
+  /** TTL in hours for cached YouTube transcript entries */
+  youtubeTranscriptCacheTTLHours: number;
+  /** Remote provider used for captionless-video audio fallback */
+  audioTranscriptionProvider: "disabled" | "supadata" | "brevilabs";
   /** Enable lexical boosts (folder and graph) in search - default: true */
   enableLexicalBoosts: boolean;
   /** Weight assigned to lexical ranking during hybrid search. */
@@ -596,6 +606,37 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   sanitizedSettings.urlExtractionTimeoutMs = isNaN(urlExtractionTimeoutMs)
     ? DEFAULT_SETTINGS.urlExtractionTimeoutMs
     : Math.min(60000, Math.max(5000, urlExtractionTimeoutMs));
+
+  if (typeof sanitizedSettings.preferredTranscriptLanguage !== "string") {
+    sanitizedSettings.preferredTranscriptLanguage = DEFAULT_SETTINGS.preferredTranscriptLanguage;
+  } else {
+    sanitizedSettings.preferredTranscriptLanguage =
+      sanitizedSettings.preferredTranscriptLanguage.trim().toLowerCase() ||
+      DEFAULT_SETTINGS.preferredTranscriptLanguage;
+  }
+
+  if (typeof sanitizedSettings.youtubeTranscriptTimestamps !== "boolean") {
+    sanitizedSettings.youtubeTranscriptTimestamps = DEFAULT_SETTINGS.youtubeTranscriptTimestamps;
+  }
+
+  if (typeof sanitizedSettings.youtubeTranscriptOutputFolder !== "string") {
+    sanitizedSettings.youtubeTranscriptOutputFolder =
+      DEFAULT_SETTINGS.youtubeTranscriptOutputFolder;
+  }
+
+  const youtubeTranscriptCacheTTLHours = Number(settingsToSanitize.youtubeTranscriptCacheTTLHours);
+  sanitizedSettings.youtubeTranscriptCacheTTLHours = isNaN(youtubeTranscriptCacheTTLHours)
+    ? DEFAULT_SETTINGS.youtubeTranscriptCacheTTLHours
+    : Math.min(720, Math.max(1, youtubeTranscriptCacheTTLHours));
+
+  const validAudioProviders = ["disabled", "supadata", "brevilabs"] as const;
+  if (
+    !validAudioProviders.includes(
+      sanitizedSettings.audioTranscriptionProvider as (typeof validAudioProviders)[number]
+    )
+  ) {
+    sanitizedSettings.audioTranscriptionProvider = DEFAULT_SETTINGS.audioTranscriptionProvider;
+  }
 
   // Ensure passMarkdownImages has a default value
   if (typeof sanitizedSettings.passMarkdownImages !== "boolean") {

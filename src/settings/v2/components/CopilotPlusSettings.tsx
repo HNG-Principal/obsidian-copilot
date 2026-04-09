@@ -131,6 +131,66 @@ export const CopilotPlusSettings: React.FC = () => {
             placeholder="e.g. copilot/converteddocs"
           />
 
+          <div className="tw-pt-4 tw-text-xl tw-font-semibold">YouTube Transcripts</div>
+
+          <SettingItem
+            type="text"
+            title="Preferred Transcript Language"
+            description="Language code to request first when a transcript provider supports multiple caption languages."
+            value={settings.preferredTranscriptLanguage}
+            onChange={(value) => {
+              updateSetting("preferredTranscriptLanguage", value);
+            }}
+            placeholder="e.g. en"
+          />
+
+          <SettingItem
+            type="switch"
+            title="Include Timestamps In Transcripts"
+            description="Add paragraph-level timestamps to transcript output used in chat context, tools, and exports."
+            checked={settings.youtubeTranscriptTimestamps}
+            onCheckedChange={(checked) => {
+              updateSetting("youtubeTranscriptTimestamps", checked);
+            }}
+          />
+
+          <SettingItem
+            type="text"
+            title="Store transcript notes at"
+            description="When you save a YouTube transcript to the vault, Copilot writes the markdown note to this folder. Leave empty to save at the vault root."
+            value={settings.youtubeTranscriptOutputFolder}
+            onChange={(value) => {
+              updateSetting("youtubeTranscriptOutputFolder", value);
+            }}
+            placeholder="e.g. copilot/youtube-transcripts"
+          />
+
+          <SettingItem
+            type="number"
+            title="YouTube Transcript Cache TTL (hours)"
+            description="How long processed YouTube transcripts stay valid before Copilot refreshes them."
+            value={settings.youtubeTranscriptCacheTTLHours}
+            onChange={(value) => updateSetting("youtubeTranscriptCacheTTLHours", Number(value))}
+          />
+
+          <SettingItem
+            type="select"
+            title="Audio Fallback Provider"
+            description="When standard captions are unavailable, Copilot can retry using a remote transcription provider."
+            value={settings.audioTranscriptionProvider}
+            onChange={(value) =>
+              updateSetting(
+                "audioTranscriptionProvider",
+                value as "disabled" | "supadata" | "brevilabs"
+              )
+            }
+            options={[
+              { label: "Brevilabs (default)", value: "brevilabs" },
+              { label: "Supadata", value: "supadata" },
+              { label: "Disabled", value: "disabled" },
+            ]}
+          />
+
           <div className="tw-pt-4 tw-text-xl tw-font-semibold">Memory (experimental)</div>
 
           <SettingItem
