@@ -72,7 +72,15 @@ Paste a URL or type `@https://...` to fetch and include a web page's content:
 @https://example.com/article summarize this article
 ```
 
-URL processing requires Copilot Plus. YouTube URLs are handled specially — Copilot will fetch the video transcript automatically.
+URL processing requires Copilot Plus. For regular web pages, Copilot fetches the page, strips navigation and boilerplate, converts the main content to markdown, and caches repeated URL fetches for the current session. Very large pages are truncated with a notice, and blocked pages return a clear error instead of raw HTML.
+
+Special cases:
+
+- YouTube URLs are handled specially — Copilot fetches the video transcript automatically.
+- X/Twitter post URLs use a social-post extractor so the post text, author, and post date are included as context.
+- PDF URLs are routed through the document conversion pipeline instead of generic web-page extraction.
+
+If a page is JavaScript-heavy and the raw fetch looks incomplete, Copilot can use the rendered content from an open Web Viewer tab as a fallback.
 
 ### Tool Mentions
 

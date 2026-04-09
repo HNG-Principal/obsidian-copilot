@@ -151,7 +151,16 @@ Just content, no path or modified date
       const result = [
         {
           type: "web_search",
-          content: "Web search content here",
+          query: "latest AI news",
+          provider: "firecrawl",
+          summary: "Web search content here",
+          results: [
+            {
+              title: "Example result",
+              url: "https://example.com",
+              snippet: "Snippet text",
+            },
+          ],
           citations: ["https://example.com", "https://example.org"],
           instruction: "Use this information to answer the question",
         },
@@ -160,7 +169,10 @@ Just content, no path or modified date
       const formatted = ToolResultFormatter.format("webSearch", JSON.stringify(result));
 
       expect(formatted).toContain("🌐 Web Search Results");
+      expect(formatted).toContain("Provider: firecrawl");
+      expect(formatted).toContain("Query: latest AI news");
       expect(formatted).toContain("Web search content here");
+      expect(formatted).toContain("1. Example result");
       expect(formatted).toContain("[1] https://example.com");
       expect(formatted).toContain("[2] https://example.org");
       expect(formatted).toContain("Note: Use this information");

@@ -108,7 +108,8 @@ Searches your vault notes by content. The agent uses this to find notes relevant
 Searches the internet for current information.
 
 - **Trigger**: Automatically when your question implies web/online content, or explicitly with `@websearch` or `@web`
-- **Requires**: A web search service configured (Firecrawl or Perplexity in self-host mode, or handled by Plus)
+- **Requires**: A web search service configured (Firecrawl, Perplexity Sonar, or SearXNG in self-host mode, or handled by Plus)
+- **Returns**: Source-aware results with titles, snippets, and citation URLs so the AI can ground its answer in the fetched web sources
 
 #### Write to File
 

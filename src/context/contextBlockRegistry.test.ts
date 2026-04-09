@@ -16,6 +16,8 @@ describe("contextBlockRegistry", () => {
       expect(tags).toContain("note_context");
       expect(tags).toContain("active_note");
       expect(tags).toContain("url_content");
+      expect(tags).toContain("web-content");
+      expect(tags).toContain("web-search");
       expect(tags).toContain("youtube_video_context");
       expect(tags).toContain("twitter_content");
       expect(tags).toContain("selected_text");
@@ -45,6 +47,8 @@ describe("contextBlockRegistry", () => {
 
     it("should return correct source type for URL blocks", () => {
       expect(getSourceType("url_content")).toBe("url");
+      expect(getSourceType("web-content")).toBe("url");
+      expect(getSourceType("web-search")).toBe("url");
       expect(getSourceType("web_tab_context")).toBe("url");
       expect(getSourceType("twitter_content")).toBe("url");
     });
@@ -62,6 +66,8 @@ describe("contextBlockRegistry", () => {
     it("should return true for recoverable types", () => {
       expect(isRecoverable("note_context")).toBe(true);
       expect(isRecoverable("url_content")).toBe(true);
+      expect(isRecoverable("web-content")).toBe(true);
+      expect(isRecoverable("web-search")).toBe(true);
       expect(isRecoverable("youtube_video_context")).toBe(true);
       expect(isRecoverable("twitter_content")).toBe(true);
     });
@@ -101,6 +107,11 @@ describe("contextBlockRegistry", () => {
 <content>Content</content>
 </url_content>`;
       expect(extractSourceFromBlock(xml, "url_content")).toBe("https://example.com/page");
+    });
+
+    it("should extract URL from web-content blocks", () => {
+      const xml = `<web-content url="https://example.com/page"><content>Content</content></web-content>`;
+      expect(extractSourceFromBlock(xml, "web-content")).toBe("https://example.com/page");
     });
 
     it("should extract name from PDF blocks", () => {
@@ -157,7 +168,12 @@ describe("contextBlockRegistry", () => {
       // These are the tags that Mention.ts and other URL processors create.
       // If a new tag is added to URL processing, it MUST be registered here.
       const registeredTags = new Set(CONTEXT_BLOCK_TYPES.map((bt) => bt.tag));
-      const urlProducerTags = ["url_content", "youtube_video_context", "twitter_content"];
+      const urlProducerTags = [
+        "url_content",
+        "web-content",
+        "youtube_video_context",
+        "twitter_content",
+      ];
 
       for (const tag of urlProducerTags) {
         expect(registeredTags.has(tag)).toBe(true);

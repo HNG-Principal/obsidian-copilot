@@ -3,6 +3,8 @@ import { ChainType } from "@/chainFactory";
 import { RESTRICTION_MESSAGES } from "@/constants";
 import { logWarn, logInfo, logError } from "@/logger";
 import { escapeXml } from "@/LLMProviders/chainRunner/utils/xmlParsing";
+import { formatWebContentContext } from "@/services/webContextFormatting";
+import type { ParsedURL } from "@/services/webContextTypes";
 import { getWebViewerService } from "@/services/webViewerService/webViewerServiceSingleton";
 import { WebViewerTimeoutError } from "@/services/webViewerService/webViewerServiceTypes";
 import { FileParserManager, type ParsedFileResult } from "@/tools/FileParserManager";
@@ -42,6 +44,27 @@ interface ConvertedDocumentContextOptions {
 type ConvertedDocumentContextFile = TFile & ConvertedDocumentContextOptions;
 
 const CONVERTED_DOCUMENT_TAG = "converted-document";
+const DEFAULT_WEB_CONTENT_CONTEXT_CHARS = 12000;
+
+/**
+ * Build a `<web-content>` prompt block and truncate oversized content when needed.
+ */
+export function buildWebContentContextBlock(
+  parsedUrl: ParsedURL,
+  maxContentChars = DEFAULT_WEB_CONTENT_CONTEXT_CHARS
+): string {
+  if (parsedUrl.error || parsedUrl.content.length <= maxContentChars) {
+    return formatWebContentContext(parsedUrl);
+  }
+
+  return formatWebContentContext({
+    ...parsedUrl,
+    status: "partial",
+    content:
+      `${parsedUrl.content.slice(0, maxContentChars).trimEnd()}\n\n` +
+      "[Content truncated to fit the context window.]",
+  });
+}
 
 export class ContextProcessor {
   private static instance: ContextProcessor;

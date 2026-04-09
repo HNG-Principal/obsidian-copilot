@@ -33,6 +33,8 @@ function buildToolResultPatterns(): Array<{ pattern: RegExp; tag: string }> {
     "active_note",
     "retrieved_document",
     "url_content",
+    "web-content",
+    "web-search",
     "youtube_video_context",
   ];
 

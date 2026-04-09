@@ -1,11 +1,9 @@
 import { getStandaloneQuestion } from "@/chainUtils";
 import { TEXT_WEIGHT } from "@/constants";
-import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
-import { hasSelfHostSearchKey, selfHostWebSearch } from "@/LLMProviders/selfHostServices";
-import { logInfo } from "@/logger";
+import { logError, logInfo } from "@/logger";
 import { shouldUseMiyo } from "@/miyo/miyoUtils";
-import { isSelfHostModeValid } from "@/plusUtils";
 import { RetrieverFactory } from "@/search/RetrieverFactory";
+import { createWebSearchProvider } from "@/services/webSearchProvider";
 import { getSettings } from "@/settings/model";
 import { z } from "zod";
 import { deduplicateSources } from "@/LLMProviders/chainRunner/utils/toolExecution";
@@ -562,27 +560,20 @@ const webSearchTool = createLangChainTool({
     try {
       // Get standalone question considering chat history
       const standaloneQuestion = await getStandaloneQuestion(query, chatHistory);
-
-      let webContent: string;
-      let citations: string[];
-
-      if (isSelfHostModeValid() && hasSelfHostSearchKey()) {
-        const result = await selfHostWebSearch(standaloneQuestion);
-        webContent = result.content;
-        citations = result.citations;
-      } else {
-        const response = await BrevilabsClient.getInstance().webSearch(standaloneQuestion);
-        webContent = response.response.choices[0].message.content;
-        citations = response.response.citations || [];
-      }
+      const provider = createWebSearchProvider();
+      const response = await provider.search(standaloneQuestion, 5);
+      const citations = response.results.map((result) => result.url).filter(Boolean);
 
       // Return structured JSON response for consistency with other tools
       // Format as an array of results like localSearch does
       const formattedResults = [
         {
           type: "web_search",
-          content: webContent,
-          citations: citations,
+          query: response.query,
+          provider: response.provider,
+          summary: response.summary,
+          results: response.results,
+          citations,
           // Instruct the model to use footnote-style citations and definitions.
           // Chat UI will render [^n] as [n] for readability and show a simple numbered Sources list.
           // When inserted into a note, the original [^n] footnotes will remain valid Markdown footnotes.
@@ -592,7 +583,7 @@ const webSearchTool = createLangChainTool({
 
       return formattedResults;
     } catch (error) {
-      console.error(`Error processing web search query ${query}:`, error);
+      logError(`Error processing web search query ${query}:`, error);
       return { error: `Web search failed: ${error}` };
     }
   },

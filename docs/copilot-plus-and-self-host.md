@@ -106,7 +106,7 @@ Self-Host Mode lets you replace Copilot's cloud services with your own infrastru
 ### What Self-Host Mode Enables
 
 - Use local or custom LLM servers
-- Custom web search via Firecrawl or Perplexity Sonar
+- Custom web search via Firecrawl, Perplexity Sonar, or SearXNG
 - Local YouTube transcript extraction via Supadata
 - Miyo desktop app for local PDF parsing, semantic search, and more
 
@@ -124,6 +124,15 @@ Choose your web search provider:
 
 - **Firecrawl** — A web crawling and scraping API. Get a key at firecrawl.dev. Enter it in **Settings → Copilot → Plus → Firecrawl API Key**.
 - **Perplexity Sonar** — An AI-powered search API. Get a key at perplexity.ai. Enter it in **Settings → Copilot → Plus → Perplexity API Key**.
+- **SearXNG** — Your own metasearch instance. Enter the base URL in **Settings → Copilot → Plus → SearXNG URL**.
+
+Additional self-host web context settings:
+
+- **URL cache TTL (hours)** — Controls how long fetched URL content stays in the local `.copilot/url-cache` directory before it is refreshed.
+- **Max URL cache entries** — Caps the number of cached URL entries kept on disk.
+- **URL extraction timeout (ms)** — Sets how long Copilot waits for page extraction before returning a timeout error.
+
+Regular URL mentions do not need a separate cloud URL-processing service anymore. Copilot extracts readable page content locally, routes PDF links through document conversion, and uses a rendered fallback when a page is open in Web Viewer and the raw HTML looks incomplete.
 
 ### YouTube Transcription in Self-Host Mode
 

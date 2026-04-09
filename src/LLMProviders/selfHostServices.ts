@@ -1,10 +1,12 @@
 import { type RerankResponse, type Youtube4llmResponse } from "@/LLMProviders/brevilabsClient";
 import { getDecryptedKey } from "@/encryptionService";
 import { logError, logInfo, logWarn } from "@/logger";
+import {
+  createWebSearchProvider,
+  getWebSearchProviderSettings,
+} from "@/services/webSearchProvider";
 import { getSettings } from "@/settings/model";
 
-const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
-const PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
 const SUPADATA_TRANSCRIPT_URL = "https://api.supadata.ai/v1/transcript";
 const SELF_HOST_RERANK_PATHS = ["/v0/rerank", "/rerank"];
 
@@ -17,12 +19,6 @@ const SUPADATA_POLL_TIMEOUT = 60000;
 export interface SelfHostWebSearchResult {
   content: string;
   citations: string[];
-}
-
-interface FirecrawlSearchResult {
-  title?: string;
-  description?: string;
-  url?: string;
 }
 
 interface SelfHostRerankItem {
@@ -47,7 +43,9 @@ interface SelfHostRerankPayload {
  */
 export function hasSelfHostSearchKey(): boolean {
   const settings = getSettings();
-  switch (settings.selfHostSearchProvider) {
+  switch (settings.webSearchProvider) {
+    case "searxng":
+      return !!settings.searxngUrl;
     case "perplexity":
       return !!settings.perplexityApiKey;
     case "firecrawl":
@@ -57,99 +55,20 @@ export function hasSelfHostSearchKey(): boolean {
 }
 
 /**
- * Web search via Firecrawl direct API (self-host mode).
- * Handles both v2 `data.web` format and older flat `data` array.
- */
-async function firecrawlSearch(query: string, apiKey: string): Promise<SelfHostWebSearchResult> {
-  const startTime = Date.now();
-
-  const response = await fetch(FIRECRAWL_SEARCH_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query, limit: 5 }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Firecrawl search failed (${response.status}): ${text}`);
-  }
-
-  const json = await response.json();
-
-  // v2 returns { data: { web: [...] } }, older responses return { data: [...] }
-  const rawData = json?.data;
-  const results: FirecrawlSearchResult[] = Array.isArray(rawData)
-    ? rawData
-    : Array.isArray(rawData?.web)
-      ? rawData.web
-      : [];
-
-  const contentParts: string[] = [];
-  const citations: string[] = [];
-
-  for (const item of results) {
-    const title = item.title || "Untitled";
-    const description = item.description || "";
-    const url = item.url || "";
-    contentParts.push(`### ${title}\n${description}\nSource: ${url}`);
-    if (url) {
-      citations.push(url);
-    }
-  }
-
-  const elapsed = Date.now() - startTime;
-  logInfo(`[selfHostWebSearch] Firecrawl: ${results.length} results in ${elapsed}ms`);
-
-  return { content: contentParts.join("\n\n"), citations };
-}
-
-/**
- * Web search via Perplexity Sonar API (self-host mode).
- */
-async function perplexitySonarSearch(
-  query: string,
-  apiKey: string
-): Promise<SelfHostWebSearchResult> {
-  const response = await fetch(PERPLEXITY_CHAT_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "sonar",
-      messages: [{ role: "user", content: query }],
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Perplexity Sonar search failed (${response.status}): ${text}`);
-  }
-
-  const json = await response.json();
-  const content = json?.choices?.[0]?.message?.content ?? "";
-  const citations: string[] = Array.isArray(json?.citations) ? json.citations : [];
-
-  return { content, citations };
-}
-
-/**
  * Dispatch self-host web search to the provider selected in settings.
  * Returns content + citations directly without the legacy Perplexity wrapper.
  */
 export async function selfHostWebSearch(query: string): Promise<SelfHostWebSearchResult> {
-  const settings = getSettings();
-  switch (settings.selfHostSearchProvider) {
-    case "perplexity":
-      return perplexitySonarSearch(query, await getDecryptedKey(settings.perplexityApiKey));
-    case "firecrawl":
-    default:
-      return firecrawlSearch(query, await getDecryptedKey(settings.firecrawlApiKey));
-  }
+  const provider = createWebSearchProvider(getWebSearchProviderSettings());
+  const response = await provider.search(query, 5);
+  const citations = response.results.map((result) => result.url).filter(Boolean);
+  const content = response.results
+    .map(
+      (result) => `### ${result.title}\n${result.content || result.snippet}\nSource: ${result.url}`
+    )
+    .join("\n\n");
+  logInfo(`[selfHostWebSearch] ${response.provider}: ${response.results.length} results`);
+  return { content, citations };
 }
 
 /**

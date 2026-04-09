@@ -16,6 +16,7 @@ import {
   EmbeddingModelProviders,
   SEND_SHORTCUT,
 } from "@/constants";
+import { WebSearchProviderType } from "@/services/webContextTypes";
 import { Notice } from "obsidian";
 
 /**
@@ -143,12 +144,22 @@ export interface CopilotSettings {
   selfHostApiKey: string;
   /** Custom Miyo server URL, e.g. "http://192.168.1.10:8742" (empty = use local service discovery) */
   miyoServerUrl: string;
-  /** Which provider to use for self-host web search */
+  /** Which provider to use for web search */
+  webSearchProvider: WebSearchProviderType;
+  /** @deprecated Use webSearchProvider instead. */
   selfHostSearchProvider: "firecrawl" | "perplexity";
+  /** Base URL for a self-hosted SearXNG instance */
+  searxngUrl: string;
   /** Firecrawl API key for self-host web search */
   firecrawlApiKey: string;
   /** Perplexity API key for self-host web search via Sonar */
   perplexityApiKey: string;
+  /** TTL in hours for cached URL extraction entries */
+  urlCacheTTLHours: number;
+  /** Maximum number of URL extraction cache entries to keep on disk */
+  maxUrlCacheEntries: number;
+  /** Timeout for URL extraction requests in milliseconds */
+  urlExtractionTimeoutMs: number;
   /** Supadata API key for self-host YouTube transcripts */
   supadataApiKey: string;
   /** Enable lexical boosts (folder and graph) in search - default: true */
@@ -288,6 +299,15 @@ async function handleEmbeddingModelKeyChange(
 export function setSettings(settings: Partial<CopilotSettings>) {
   const previousSettings = getSettings();
   const mergedSettings = { ...previousSettings, ...settings };
+
+  if (settings.webSearchProvider !== undefined && settings.selfHostSearchProvider === undefined) {
+    mergedSettings.selfHostSearchProvider =
+      settings.webSearchProvider === "searxng" ? "firecrawl" : settings.webSearchProvider;
+  }
+
+  if (settings.selfHostSearchProvider !== undefined && settings.webSearchProvider === undefined) {
+    mergedSettings.webSearchProvider = settings.selfHostSearchProvider;
+  }
 
   if (settings.enabledTools && !settings.autonomousAgentEnabledToolIds) {
     mergedSettings.autonomousAgentEnabledToolIds = settings.enabledTools;
@@ -536,15 +556,46 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.miyoServerUrl = DEFAULT_SETTINGS.miyoServerUrl;
   }
 
-  // Ensure selfHostSearchProvider is a valid value
-  const validSearchProviders = ["firecrawl", "perplexity"] as const;
+  // Ensure web search provider is a valid value
+  const validSearchProviders = ["firecrawl", "perplexity", "searxng"] as const;
   if (
     !validSearchProviders.includes(
-      sanitizedSettings.selfHostSearchProvider as (typeof validSearchProviders)[number]
+      (sanitizedSettings.webSearchProvider ||
+        sanitizedSettings.selfHostSearchProvider) as (typeof validSearchProviders)[number]
     )
   ) {
-    sanitizedSettings.selfHostSearchProvider = DEFAULT_SETTINGS.selfHostSearchProvider;
+    sanitizedSettings.webSearchProvider = DEFAULT_SETTINGS.webSearchProvider;
   }
+
+  if (!sanitizedSettings.webSearchProvider) {
+    sanitizedSettings.webSearchProvider =
+      (sanitizedSettings.selfHostSearchProvider as WebSearchProviderType | undefined) ||
+      DEFAULT_SETTINGS.webSearchProvider;
+  }
+
+  sanitizedSettings.selfHostSearchProvider =
+    sanitizedSettings.webSearchProvider === "searxng"
+      ? DEFAULT_SETTINGS.selfHostSearchProvider
+      : sanitizedSettings.webSearchProvider;
+
+  if (typeof sanitizedSettings.searxngUrl !== "string") {
+    sanitizedSettings.searxngUrl = DEFAULT_SETTINGS.searxngUrl;
+  }
+
+  const urlCacheTTLHours = Number(settingsToSanitize.urlCacheTTLHours);
+  sanitizedSettings.urlCacheTTLHours = isNaN(urlCacheTTLHours)
+    ? DEFAULT_SETTINGS.urlCacheTTLHours
+    : Math.min(168, Math.max(1, urlCacheTTLHours));
+
+  const maxUrlCacheEntries = Number(settingsToSanitize.maxUrlCacheEntries);
+  sanitizedSettings.maxUrlCacheEntries = isNaN(maxUrlCacheEntries)
+    ? DEFAULT_SETTINGS.maxUrlCacheEntries
+    : Math.min(1000, Math.max(10, maxUrlCacheEntries));
+
+  const urlExtractionTimeoutMs = Number(settingsToSanitize.urlExtractionTimeoutMs);
+  sanitizedSettings.urlExtractionTimeoutMs = isNaN(urlExtractionTimeoutMs)
+    ? DEFAULT_SETTINGS.urlExtractionTimeoutMs
+    : Math.min(60000, Math.max(5000, urlExtractionTimeoutMs));
 
   // Ensure passMarkdownImages has a default value
   if (typeof sanitizedSettings.passMarkdownImages !== "boolean") {
