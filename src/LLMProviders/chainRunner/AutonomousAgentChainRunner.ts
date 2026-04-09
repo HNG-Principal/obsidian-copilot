@@ -4,7 +4,10 @@ import { logError, logInfo, logWarn } from "@/logger";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
 import { checkIsPlusUser } from "@/plusUtils";
 import { getSettings } from "@/settings/model";
+import { ConfirmModal } from "@/components/modals/ConfirmModal";
+import { AGENT_INSTRUCTIONS, composeAgentPrompt } from "@/system-prompts/agentSystemPrompt";
 import { getSystemPromptWithMemory } from "@/system-prompts/systemPromptBuilder";
+import { runAgentLoop } from "@/tools/agentLoop";
 import { initializeBuiltinTools } from "@/tools/builtinTools";
 import { ToolRegistry } from "@/tools/ToolRegistry";
 import { StructuredTool } from "@langchain/core/tools";
@@ -135,7 +138,9 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
     }
 
     // Get enabled tool IDs from settings
-    const enabledToolIds = new Set(settings.autonomousAgentEnabledToolIds || []);
+    const enabledToolIds = new Set(
+      settings.enabledTools || settings.autonomousAgentEnabledToolIds || []
+    );
 
     // Get all enabled tools from registry
     return registry.getEnabledTools(enabledToolIds, !!this.chainManager.app?.vault);
@@ -309,22 +314,20 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
 
     // Get tool metadata for custom instructions (semantic guidance only)
     const registry = ToolRegistry.getInstance();
+    const toolDescriptions = registry.getToolDescriptions();
     const toolMetadata = availableTools
       .map((tool) => registry.getToolMetadata(tool.name))
       .filter((meta): meta is NonNullable<typeof meta> => meta !== undefined);
-
-    // Build tool-specific instructions from metadata (no XML format needed)
     const toolInstructions = toolMetadata
       .filter((meta) => meta.customPromptInstructions)
       .map((meta) => `For ${meta.displayName}: ${meta.customPromptInstructions}`)
       .join("\n");
 
-    const parts = [basePrompt];
-    if (toolInstructions) {
-      parts.push(`## Tool Guidelines\n${toolInstructions}`);
-    }
-    parts.push(AGENT_LOOP_GUIDANCE);
-    return parts.join("\n\n");
+    return composeAgentPrompt(
+      basePrompt,
+      `${AGENT_INSTRUCTIONS}\n\n${AGENT_LOOP_GUIDANCE}`,
+      [toolDescriptions, toolInstructions].filter(Boolean).join("\n\n")
+    );
   }
 
   /**
@@ -389,7 +392,6 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
     });
 
     const chatModel = this.chainManager.chatModelManager.getChatModel();
-    const adapter = ModelAdapterFactory.createAdapter(chatModel);
     // Agent mode should never show thinking tokens in the response
     const thinkStreamer = new ThinkBlockStreamer(updateCurrentAiMessage, true);
 
@@ -431,17 +433,77 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
       this.startReasoningTimer(updateCurrentAiMessage, abortController);
 
       // Run the simplified ReAct loop with native tool calling
-      const loopResult = await this.runReActLoop({
-        boundModel: context.loopDeps.boundModel,
-        chatModel,
-        tools: context.loopDeps.availableTools,
+      const loopResult = await runAgentLoop({
+        userMessage: context.originalUserPrompt,
         messages: context.messages,
-        originalPrompt: context.originalUserPrompt,
+        tools: context.loopDeps.availableTools,
+        maxTurns: getSettings().maxAgentTurns || getSettings().autonomousAgentMaxIterations,
         abortController,
-        updateCurrentAiMessage,
-        processLocalSearchResult: context.loopDeps.processLocalSearchResult,
-        applyCiCOrderingToLocalSearchResult: context.loopDeps.applyCiCOrderingToLocalSearchResult,
-        adapter,
+        requireToolApproval: getSettings().requireToolApproval,
+        invokeLLM: async (messages) =>
+          this.streamModelResponse(
+            context.loopDeps.boundModel,
+            messages,
+            abortController,
+            updateCurrentAiMessage
+          ),
+        processToolResult: (toolName, result, success, processContext) => {
+          if (toolName === "localSearch" && success) {
+            const processed = context.loopDeps.processLocalSearchResult({
+              result,
+              success,
+            });
+            return {
+              llmResult: context.loopDeps.applyCiCOrderingToLocalSearchResult(
+                processed.formattedForLLM,
+                processContext.originalPrompt
+              ),
+              displayResult: processed.formattedForDisplay,
+              sources: processed.sources,
+            };
+          }
+
+          return {
+            llmResult: success ? result : result,
+          };
+        },
+        onApprovalRequest: (invocation) =>
+          new Promise<boolean>((resolve) => {
+            const metadata = ToolRegistry.getInstance().getToolMetadata(invocation.toolId);
+            const displayName = metadata?.displayName || invocation.toolId;
+            new ConfirmModal(
+              app,
+              () => resolve(true),
+              `Allow the autonomous agent to run ${displayName}?\n\nParameters:\n${JSON.stringify(invocation.parameters, null, 2)}`,
+              "Agent Tool Approval",
+              "Approve",
+              "Reject",
+              () => resolve(false)
+            ).open();
+          }),
+        onTurnUpdate: (session, turn) => {
+          const latestInvocation = turn?.toolInvocations[turn.toolInvocations.length - 1];
+          if (!latestInvocation) {
+            return;
+          }
+
+          const statusLabel = latestInvocation.status.replace(/_/g, " ");
+          const displayName = getToolDisplayName(latestInvocation.toolId);
+          if (latestInvocation.status === "running") {
+            this.addReasoningStep(`Running ${displayName}`, latestInvocation.toolId);
+          } else if (latestInvocation.status === "completed") {
+            this.addReasoningStep(`Completed ${displayName}`, latestInvocation.toolId, true);
+          } else if (latestInvocation.status === "pending") {
+            this.addReasoningStep(`Waiting for approval: ${displayName}`, latestInvocation.toolId);
+          } else if (
+            latestInvocation.status === "failed" ||
+            latestInvocation.status === "timeout"
+          ) {
+            this.addReasoningStep(`${displayName} ${statusLabel}`, latestInvocation.toolId);
+          } else if (latestInvocation.status === "rejected") {
+            this.addReasoningStep(`Rejected ${displayName}`, latestInvocation.toolId);
+          }
+        },
       });
 
       // If abort was already handled by timer, skip further processing
@@ -450,8 +512,16 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
         return "";
       }
 
+      this.stopReasoningTimer();
+      this.reasoningState.status = "complete";
+      const reasoningBlock = this.buildReasoningBlockMarkup();
+      const finalRenderableResponse = reasoningBlock
+        ? `${reasoningBlock}\n\n${loopResult.finalResponse || ""}`
+        : loopResult.finalResponse || "";
+      updateCurrentAiMessage(finalRenderableResponse);
+
       // Finalize and return
-      const uniqueSources = deduplicateSources(loopResult.sources);
+      const uniqueSources = deduplicateSources(loopResult.sources || []);
 
       if (context.messages.length > 0) {
         recordPromptPayload({
@@ -462,7 +532,7 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
       }
 
       await this.handleResponse(
-        loopResult.finalResponse,
+        finalRenderableResponse,
         userMessage,
         abortController,
         addMessage,
@@ -473,7 +543,7 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
       );
 
       this.lastDisplayedContent = "";
-      return loopResult.finalResponse;
+      return finalRenderableResponse;
     } catch (error: any) {
       // Always stop the reasoning timer on error
       this.stopReasoningTimer();
@@ -577,34 +647,35 @@ export class AutonomousAgentChainRunner extends CopilotPlusChainRunner {
 
     // Get tool metadata for semantic guidance (no XML format instructions needed)
     const registry = ToolRegistry.getInstance();
+    // Extract L5 for original prompt
+    const l5User = envelope.layers.find((l) => l.id === "L5_USER");
+    const l5Text = l5User?.text || "";
+    const originalUserPrompt = l5Text || userMessage.originalMessage || userMessage.message;
     const toolMetadata = availableTools
       .map((tool) => registry.getToolMetadata(tool.name))
       .filter((meta): meta is NonNullable<typeof meta> => meta !== undefined);
-
-    // Build tool-specific instructions from metadata
     const toolInstructions = toolMetadata
       .filter((meta) => meta.customPromptInstructions)
       .map((meta) => `For ${meta.displayName}: ${meta.customPromptInstructions}`)
       .join("\n");
-
-    // Combine system message with tool guidelines and agent loop guidance
-    const systemContent = [
+    const explicitToolRequests = Array.from(registry.getCopilotCommandMappings().entries())
+      .filter(([alias]) => originalUserPrompt.toLowerCase().includes(alias))
+      .map(([alias, definition]) => `- ${alias}: call the tool named ${definition.metadata.id}`)
+      .join("\n");
+    const systemContent = composeAgentPrompt(
       systemMessage?.content || "",
-      toolInstructions ? `\n## Tool Guidelines\n${toolInstructions}` : "",
-      AGENT_LOOP_GUIDANCE,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+      `${AGENT_INSTRUCTIONS}\n\n${AGENT_LOOP_GUIDANCE}${
+        explicitToolRequests
+          ? `\n\n## Explicit Tool Requests\nThe user explicitly requested these tool aliases. Call the mapped tool before answering unless the request is impossible.\n${explicitToolRequests}`
+          : ""
+      }`,
+      [registry.getToolDescriptions(), toolInstructions].filter(Boolean).join("\n\n")
+    );
 
     // Use SystemMessage for better provider compatibility
     if (systemContent) {
       messages.push(new SystemMessage({ content: systemContent }));
     }
-
-    // Extract L5 for original prompt
-    const l5User = envelope.layers.find((l) => l.id === "L5_USER");
-    const l5Text = l5User?.text || "";
-    const originalUserPrompt = l5Text || userMessage.originalMessage || userMessage.message;
 
     // Insert L4 (chat history) between system and user
     const tempMessages: { role: string; content: string | MessageContent[] }[] = [];

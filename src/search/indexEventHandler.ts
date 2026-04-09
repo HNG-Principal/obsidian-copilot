@@ -7,13 +7,14 @@ import type { SemanticIndexBackend } from "./indexBackend/SemanticIndexBackend";
 import { IndexOperations } from "./indexOperations";
 import { getMatchingPatterns, shouldIndexFile } from "./searchUtils";
 
-const DEBOUNCE_DELAY = 5000; // 5 seconds
+const DEBOUNCE_DELAY = 500;
 
 export class IndexEventHandler {
   private debounceTimer: number | null = null;
   private lastActiveFile: TFile | null = null;
   private lastActiveFileMtime: number | null = null;
   private listenersActive = false;
+  private initialSyncStarted = false;
 
   constructor(
     private app: App,
@@ -49,6 +50,10 @@ export class IndexEventHandler {
       this.app.workspace.on("active-leaf-change", this.handleActiveLeafChange);
       this.app.vault.on("delete", this.handleFileDelete);
       this.listenersActive = true;
+      if (!this.initialSyncStarted) {
+        this.initialSyncStarted = true;
+        void this.queueInitialSync();
+      }
     } else if (!shouldListen && this.listenersActive) {
       this.teardownEventListeners();
     }
@@ -117,12 +122,12 @@ export class IndexEventHandler {
       const wasModified = previousMtime !== null && fileToCheck.stat.mtime > previousMtime;
 
       if (shouldProcess && wasModified) {
-        this.debouncedReindexFile(fileToCheck);
+        this.debouncedUpdateChanged();
       }
     }
   };
 
-  private debouncedReindexFile = (file: TFile) => {
+  private debouncedUpdateChanged = () => {
     if (!this.shouldHandleEvents()) {
       return;
     }
@@ -131,20 +136,24 @@ export class IndexEventHandler {
     }
 
     this.debounceTimer = window.setTimeout(() => {
-      if (getSettings().debug) {
-        console.log("Copilot Plus: Triggering reindex for file ", file.path);
-      }
-      this.indexOps.reindexFile(file);
+      void this.indexOps.updateChanged();
       this.debounceTimer = null;
     }, DEBOUNCE_DELAY);
   };
+
+  private async queueInitialSync(): Promise<void> {
+    const changedFiles = await this.indexOps.detectChanges();
+    if (changedFiles.length > 0) {
+      await this.indexOps.updateChanged();
+    }
+  }
 
   private handleFileDelete = async (file: TAbstractFile) => {
     if (!this.shouldHandleEvents()) {
       return;
     }
     if (file instanceof TFile) {
-      await this.indexBackend.removeByPath(file.path);
+      await this.indexOps.removeDocument(file.path);
     }
   };
 

@@ -9,6 +9,8 @@ import {
 import EmbeddingsManager from "@/LLMProviders/embeddingManager";
 import { logError, logInfo, logWarn } from "@/logger";
 import { RateLimiter } from "@/rateLimiter";
+import { readIndexMetadata, writeIndexMetadata } from "@/search/indexMetadata";
+import type { IndexMetadata } from "@/search/types";
 import { ChunkManager, getSharedChunkManager } from "@/search/v3/chunks";
 import { getSettings, subscribeToSettingsChange } from "@/settings/model";
 import { formatDateTime } from "@/utils";
@@ -18,8 +20,22 @@ import type {
   SemanticIndexBackend,
   SemanticIndexDocument,
 } from "./indexBackend/SemanticIndexBackend";
-import { getMatchingPatterns, shouldIndexFile } from "./searchUtils";
+import {
+  computeContentHash,
+  computeWordCount,
+  extractMarkdownHeadings,
+  extractMarkdownTags,
+  getMatchingPatterns,
+  getVectorLength,
+  parseTitleDate,
+  shouldIndexFile,
+} from "./searchUtils";
 
+const INDEX_METADATA_VERSION = 1;
+
+/**
+ * Mutable runtime state for an active indexing job.
+ */
 export interface IndexingState {
   isIndexingPaused: boolean;
   isIndexingCancelled: boolean;
@@ -28,6 +44,9 @@ export interface IndexingState {
   processedFiles: Set<string>;
 }
 
+/**
+ * Coordinates full and incremental semantic indexing for the vault.
+ */
 export class IndexOperations {
   private rateLimiter: RateLimiter;
   private checkpointInterval: number;
@@ -66,6 +85,21 @@ export class IndexOperations {
     this.checkpointInterval = 8 * this.embeddingBatchSize;
   }
 
+  /**
+   * Return the current persisted index metadata, if any.
+   */
+  public async getStoredIndexMetadata(): Promise<IndexMetadata | null> {
+    return readIndexMetadata(this.app, getSettings().enableIndexSync);
+  }
+
+  /**
+   * Return true when the persisted index has been marked stale.
+   */
+  public async isIndexStale(): Promise<boolean> {
+    const metadata = await this.getStoredIndexMetadata();
+    return Boolean(metadata?.stale);
+  }
+
   public async indexVaultToVectorStore(
     overwrite?: boolean,
     options?: { userInitiated?: boolean }
@@ -100,6 +134,24 @@ export class IndexOperations {
           completionStatus: "error",
         });
         return 0;
+      }
+
+      if (requiresEmbeddings && embeddingInstance && !overwrite) {
+        const isValidDimension = await this.validateStoredEmbeddingDimension(embeddingInstance);
+        if (!isValidDimension) {
+          setIndexingProgressState({
+            isActive: false,
+            isPaused: false,
+            isCancelled: false,
+            indexedCount: 0,
+            totalFiles: 0,
+            errors: [
+              "Stored search index uses a different embedding dimension. Run a full re-index to rebuild the vault search index.",
+            ],
+            completionStatus: "error",
+          });
+          return 0;
+        }
       }
 
       // Check for model change first
@@ -290,6 +342,10 @@ export class IndexOperations {
           });
       }, 100); // 100ms delay
 
+      if (requiresEmbeddings && embeddingInstance) {
+        await this.persistIndexMetadata(embeddingInstance, Boolean(overwrite));
+      }
+
       return this.state.indexedCount;
     } catch (error) {
       this.handleError(error);
@@ -330,12 +386,27 @@ export class IndexOperations {
       const batch = files.slice(i, i + CHUNK_BATCH_SIZE);
       const filePaths = batch.map((f) => f.path);
       const chunks = await this.chunkManager.getChunks(filePaths);
+      const fileMetadataMap = new Map<
+        string,
+        { tags: string[]; headings: string[]; wordCount: number; titleDate?: number }
+      >();
+
+      for (const file of batch) {
+        const content = await this.app.vault.cachedRead(file);
+        fileMetadataMap.set(file.path, {
+          tags: extractMarkdownTags(content),
+          headings: extractMarkdownHeadings(content),
+          wordCount: computeWordCount(content),
+          titleDate: parseTitleDate(file.basename),
+        });
+      }
 
       for (const chunk of chunks) {
         const file = this.app.vault.getAbstractFileByPath(chunk.notePath);
         if (!file || !(file instanceof TFile)) continue;
 
         const fileCache = this.app.metadataCache.getFileCache(file);
+        const derivedMetadata = fileMetadataMap.get(file.path);
         const fileInfo = {
           title: chunk.title,
           path: chunk.notePath,
@@ -350,6 +421,13 @@ export class IndexOperations {
             modified: formatDateTime(new Date(chunk.mtime)).display,
             chunkId: chunk.id, // Store chunkId in metadata for retrieval
             heading: chunk.heading, // Store heading for context
+            headingPath: chunk.heading ? [chunk.heading] : [],
+            startLine: (chunk as any).startLine ?? undefined,
+            endLine: (chunk as any).endLine ?? undefined,
+            documentTags: derivedMetadata?.tags ?? [],
+            documentHeadings: derivedMetadata?.headings ?? [],
+            documentWordCount: derivedMetadata?.wordCount ?? 0,
+            documentTitleDate: derivedMetadata?.titleDate,
           },
         };
 
@@ -378,6 +456,103 @@ export class IndexOperations {
 
   private getDocHash(sourceDocument: string): string {
     return MD5(sourceDocument).toString();
+  }
+
+  /**
+   * Detect changed, new, or deleted markdown files relative to stored metadata hashes.
+   */
+  public async detectChanges(): Promise<string[]> {
+    const metadata = await this.getStoredIndexMetadata();
+    const files = await this.getEligibleMarkdownFiles();
+    const currentHashes = await this.buildDocumentHashes(files);
+
+    if (!metadata) {
+      return Object.keys(currentHashes).sort();
+    }
+
+    const changed = new Set<string>();
+    Object.entries(currentHashes).forEach(([filePath, hash]) => {
+      if (metadata.documentHashes[filePath] !== hash) {
+        changed.add(filePath);
+      }
+    });
+
+    Object.keys(metadata.documentHashes).forEach((filePath) => {
+      if (!(filePath in currentHashes)) {
+        changed.add(filePath);
+      }
+    });
+
+    return Array.from(changed).sort();
+  }
+
+  /**
+   * Re-index only changed files and remove deleted entries.
+   */
+  public async updateChanged(): Promise<number> {
+    const changedPaths = await this.detectChanges();
+    if (changedPaths.length === 0) {
+      return 0;
+    }
+
+    const metadata =
+      (await this.getStoredIndexMetadata()) ??
+      ({
+        version: INDEX_METADATA_VERSION,
+        embeddingModel: getSettings().embeddingModelKey,
+        embeddingDimension: 0,
+        lastFullIndexAt: 0,
+        documentHashes: {},
+        stale: false,
+      } as IndexMetadata);
+    const files = await this.getEligibleMarkdownFiles();
+    const filesByPath = new Map(files.map((file) => [file.path, file]));
+    let processedCount = 0;
+
+    for (const filePath of changedPaths) {
+      const file = filesByPath.get(filePath);
+      if (!file) {
+        await this.removeDocument(filePath);
+        delete metadata.documentHashes[filePath];
+        continue;
+      }
+
+      try {
+        await this.reindexFile(file);
+        const content = await this.app.vault.cachedRead(file);
+        metadata.documentHashes[filePath] = computeContentHash(content);
+        processedCount += 1;
+      } catch (error) {
+        logWarn(`Skipping incremental re-index for ${filePath}`, error);
+      }
+    }
+
+    await writeIndexMetadata(this.app, getSettings().enableIndexSync, metadata);
+    return processedCount;
+  }
+
+  /**
+   * Remove a file and all of its chunks from the index and metadata store.
+   */
+  public async removeDocument(filePath: string): Promise<void> {
+    await this.indexBackend.removeByPath(filePath);
+    const metadata = await this.getStoredIndexMetadata();
+    if (!metadata) {
+      return;
+    }
+
+    delete metadata.documentHashes[filePath];
+    await writeIndexMetadata(this.app, getSettings().enableIndexSync, metadata);
+  }
+
+  /**
+   * Rebuild the entire index with optional progress callbacks for UI status.
+   */
+  public async rebuildAll(onProgress?: (current: number, total: number) => void): Promise<void> {
+    const files = await this.getEligibleMarkdownFiles();
+    onProgress?.(0, files.length);
+    await this.indexVaultToVectorStore(true, { userInitiated: true });
+    onProgress?.(files.length, files.length);
   }
 
   private async getFilesToIndex(overwrite?: boolean): Promise<TFile[]> {
@@ -430,6 +605,71 @@ export class IndexOperations {
     );
 
     return Array.from(filesToIndex);
+  }
+
+  private async getEligibleMarkdownFiles(): Promise<TFile[]> {
+    const { inclusions, exclusions } = getMatchingPatterns();
+    return this.app.vault.getMarkdownFiles().filter((file) => {
+      return shouldIndexFile(file, inclusions, exclusions);
+    });
+  }
+
+  private async buildDocumentHashes(files: TFile[]): Promise<Record<string, string>> {
+    const documentHashes: Record<string, string> = {};
+
+    for (const file of files) {
+      const content = await this.app.vault.cachedRead(file);
+      if (!content.trim()) {
+        continue;
+      }
+      documentHashes[file.path] = computeContentHash(content);
+    }
+
+    return documentHashes;
+  }
+
+  private async validateStoredEmbeddingDimension(
+    embeddingInstance: NonNullable<Awaited<ReturnType<EmbeddingsManager["getEmbeddingsAPI"]>>>
+  ): Promise<boolean> {
+    const metadata = await this.getStoredIndexMetadata();
+    if (!metadata?.embeddingDimension) {
+      return true;
+    }
+
+    const currentDimension = await getVectorLength(embeddingInstance);
+    if (metadata.embeddingDimension === currentDimension) {
+      return true;
+    }
+
+    await writeIndexMetadata(this.app, getSettings().enableIndexSync, {
+      ...metadata,
+      stale: true,
+    });
+    new Notice("Embedding dimension changed. Run a full re-index to rebuild Copilot search.");
+    return false;
+  }
+
+  private async persistIndexMetadata(
+    embeddingInstance: NonNullable<Awaited<ReturnType<EmbeddingsManager["getEmbeddingsAPI"]>>>,
+    overwrite: boolean
+  ): Promise<void> {
+    const existingMetadata = await this.getStoredIndexMetadata();
+    const files = await this.getEligibleMarkdownFiles();
+    const documentHashes = await this.buildDocumentHashes(files);
+    const embeddingModel = EmbeddingsManager.getModelName(embeddingInstance);
+    const embeddingDimension = await getVectorLength(embeddingInstance);
+
+    await writeIndexMetadata(this.app, getSettings().enableIndexSync, {
+      version: INDEX_METADATA_VERSION,
+      embeddingModel,
+      embeddingDimension,
+      lastFullIndexAt:
+        overwrite || !existingMetadata?.lastFullIndexAt
+          ? Date.now()
+          : existingMetadata.lastFullIndexAt,
+      documentHashes,
+      stale: false,
+    });
   }
 
   private initializeIndexingState(totalFiles: number) {
@@ -571,6 +811,9 @@ export class IndexOperations {
     });
   }
 
+  /**
+   * Re-index a single markdown file and refresh its stored content hash.
+   */
   public async reindexFile(file: TFile): Promise<void> {
     try {
       const requiresEmbeddings = this.indexBackend.requiresEmbeddings();
@@ -635,6 +878,13 @@ export class IndexOperations {
       // Mark that we have unsaved changes instead of saving immediately
       this.indexBackend.markUnsavedChanges();
 
+      const metadata = await this.getStoredIndexMetadata();
+      if (metadata) {
+        const content = await this.app.vault.cachedRead(file);
+        metadata.documentHashes[file.path] = computeContentHash(content);
+        await writeIndexMetadata(this.app, getSettings().enableIndexSync, metadata);
+      }
+
       if (getSettings().debug) {
         console.log(`Reindexed file: ${file.path}`);
       }
@@ -643,6 +893,9 @@ export class IndexOperations {
     }
   }
 
+  /**
+   * Cancel the currently running indexing job.
+   */
   public async cancelIndexing(): Promise<void> {
     logInfo("Indexing cancelled by user");
     this.state.isIndexingCancelled = true;

@@ -26,15 +26,25 @@ When the autonomous agent is enabled, Copilot can:
 
 The agent activates automatically when you're in **Copilot Plus** mode. You don't need to do anything special — just ask your question.
 
-### Max Iterations
+### Max Agent Turns
 
-The agent works in iteration cycles (think → use a tool → think → use a tool → answer). You can control the maximum number of iterations before the agent stops:
+The agent works in turn cycles (think → use a tool → observe → continue). You can control the maximum number of turns before the agent stops:
 
-- **Default**: 4 iterations
-- **Maximum**: 16 iterations
-- **Setting**: **Settings → Copilot → Plus → Autonomous Agent Max Iterations**
+- **Default**: 10 turns
+- **Maximum**: 25 turns
+- **Setting**: **Settings → Copilot → Plus → Max Iterations**
 
 The agent also has a maximum runtime of 5 minutes per response, regardless of iteration count.
+
+### Require Tool Approval
+
+You can require confirmation before destructive tools run.
+
+- **Default**: On
+- **Setting**: **Settings → Copilot → Plus → Require Tool Approval**
+- **Applies to**: file-writing and memory-writing tools
+
+Read-only tools such as vault search, web search, file tree, note reading, and time tools still run automatically.
 
 ---
 
@@ -78,6 +88,8 @@ Lists all tags in your vault with usage statistics. Useful for tag reorganizatio
 
 Saves information to your memory when you explicitly ask the AI to remember something. See [Copilot Plus and Self-Host](copilot-plus-and-self-host.md#memory-system) for details.
 
+- **Approval**: If **Require Tool Approval** is enabled, agent-triggered memory writes ask for confirmation first.
+
 > **Requires**: **Settings → Copilot → Plus → Reference Saved Memories** must be enabled. If this setting is off, the tool is not registered and memory commands will not work.
 
 ### Configurable Tools
@@ -96,7 +108,8 @@ Searches your vault notes by content. The agent uses this to find notes relevant
 Searches the internet for current information.
 
 - **Trigger**: Automatically when your question implies web/online content, or explicitly with `@websearch` or `@web`
-- **Requires**: A web search service configured (Firecrawl or Perplexity in self-host mode, or handled by Plus)
+- **Requires**: A web search service configured (Firecrawl, Perplexity Sonar, or SearXNG in self-host mode, or handled by Plus)
+- **Returns**: Source-aware results with titles, snippets, and citation URLs so the AI can ground its answer in the fetched web sources
 
 #### Write to File
 
@@ -105,6 +118,7 @@ Creates a new note or overwrites an existing one entirely.
 - **Trigger**: Automatically for "create a note" requests, or explicitly with `@composer` (available in both Copilot Plus and Projects mode)
 - **Behavior**: Shows a preview of the content before writing. You can review and accept or reject the change.
 - **Auto-accept**: Enable **Settings → Copilot → Plus → Auto-accept edits** to skip the preview
+- **Approval**: If **Require Tool Approval** is enabled, the agent asks for confirmation before opening the write flow
 
 #### Replace in File
 
@@ -113,6 +127,23 @@ Makes targeted changes to an existing note using search-and-replace blocks.
 - **Use case**: Small edits (adding a bullet, updating a section) — more precise than rewriting the whole note
 - **Behavior**: Shows a diff preview before applying the change
 - **Auto-accept**: Same setting as Write to File
+- **Approval**: If **Require Tool Approval** is enabled, the agent asks for confirmation before opening the edit flow
+
+#### Save to Wiki
+
+Hands generated content off to the Wiki Writer plugin so you can save it as a structured wiki page.
+
+- **Trigger**: Automatically when the agent decides a response should become a durable wiki note, or explicitly with `@wiki`
+- **Requires**: The separate Wiki Writer plugin must be installed and enabled in the same vault
+- **Behavior**: Opens Wiki Writer's save dialog with the content prefilled so you can choose page type, domain, and other metadata
+
+#### Save to Wiki
+
+Hands generated content off to the Wiki Writer plugin so you can save it as a structured wiki page.
+
+- **Trigger**: Automatically when the agent decides a response should become a durable wiki note, or explicitly with `@wiki`
+- **Requires**: The separate Wiki Writer plugin must be installed and enabled in the same vault
+- **Behavior**: Opens Wiki Writer's save dialog with the content prefilled so you can choose page type, domain, and other metadata
 
 #### Save to Wiki
 
@@ -127,8 +158,11 @@ Hands generated content off to the Wiki Writer plugin so you can save it as a st
 Fetches the transcript of a YouTube video.
 
 - **Trigger**: Automatically when you paste a YouTube URL in your message
+- **What Copilot returns**: The transcript is normalized into structured video context with title, URL, language, extraction source, and transcript text
+- **Built-in behavior**: Copilot prefers captions first, caches processed transcripts locally, and can reuse them across chats until the cache expires
 - **No extra setup needed**: Just include the URL in your message
-- **Self-host option**: Use your own Supadata API key for transcription in self-host mode
+- **Optional settings**: You can choose a preferred transcript language, include or hide timestamps, set the transcript cache TTL, and choose where saved transcript notes go in your vault
+- **Self-host option**: In self-host mode, Copilot can use your Supadata API key and optional audio-transcription fallback provider when captions are unavailable
 
 ---
 
@@ -138,6 +172,8 @@ Go to **Settings → Copilot → Plus → Tool Settings** to:
 
 - See all available tools
 - Enable or disable individual configurable tools
+- Control the maximum number of agent turns
+- Require approval for destructive tools
 - View what each tool does
 
 ---
@@ -160,12 +196,14 @@ See [Context and Mentions](context-and-mentions.md) for the full @-mention refer
 
 ## Tool Call Indicators
 
-While the agent is working, the chat shows status indicators for each tool call:
+While the agent is working, the chat shows status indicators for each tool call and reasoning step:
 
 - "Reading files"
 - "Searching the web"
 - "Reading file tree"
 - "Compacting"
+
+Completed responses also include a **Sources** section listing which tools contributed to the answer.
 
 This lets you see what the agent is doing as it works.
 

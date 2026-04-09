@@ -12,10 +12,13 @@ import { ContextCache, ProjectContextCache } from "@/cache/projectContextCache";
 import { ChainType } from "@/chainFactory";
 import CopilotView from "@/components/CopilotView";
 import { CHAT_VIEWTYPE, VAULT_VECTOR_STORE_STRATEGY } from "@/constants";
+import { buildYouTubeContextBlock } from "@/contextProcessor";
 import { logError, logInfo, logWarn } from "@/logger";
 import CopilotPlugin from "@/main";
 import { Mention } from "@/mentions/Mention";
 import { getMatchingPatterns, shouldIndexFile } from "@/search/searchUtils";
+import { formatYouTubeTimestamp } from "@/services/youtubeTranscriptFormatter";
+import { YouTubeExtractor } from "@/services/youtubeExtractor";
 import { getSettings, subscribeToSettingsChange, updateSetting } from "@/settings/model";
 import { FileParserManager, saveConvertedDocOutput } from "@/tools/FileParserManager";
 import { err2String } from "@/utils";
@@ -773,11 +776,23 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
         youtubeUrl,
         "youtube",
         async () => {
-          return BrevilabsClient.getInstance().youtube4llm(youtubeUrl);
+          return YouTubeExtractor.getInstance().extractTranscript(youtubeUrl);
         }
       );
-      if (response.response.transcript) {
-        return `\n\nYouTube transcript from ${youtubeUrl}:\n${response.response.transcript}`;
+      if (response.transcript.plainText) {
+        return buildYouTubeContextBlock({
+          title: response.video.title,
+          url: response.video.url,
+          videoId: response.video.videoId,
+          channel: response.video.channelName,
+          description: response.video.description,
+          uploadDate: response.video.publicationDate,
+          duration:
+            response.video.durationSeconds != null
+              ? formatYouTubeTimestamp(response.video.durationSeconds)
+              : undefined,
+          transcript: response.transcript.formattedMarkdown || response.transcript.plainText,
+        });
       }
       return "";
     } catch (error) {

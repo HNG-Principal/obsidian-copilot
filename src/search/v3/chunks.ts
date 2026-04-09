@@ -1,7 +1,9 @@
 import { logInfo, logWarn } from "@/logger";
 import { CHUNK_SIZE } from "@/constants";
+import type { VaultChunk } from "@/search/types";
 import { App, TFile } from "obsidian";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { MD5 } from "crypto-js";
 import { MemoryManager } from "./utils/MemoryManager";
 
 /**
@@ -35,6 +37,260 @@ export const DEFAULT_CHUNK_OPTIONS: ChunkOptions = {
   overlap: 0,
   maxBytesTotal: 10 * 1024 * 1024, // 10MB default
 };
+
+export interface ChunkDocumentOptions {
+  maxChunkTokens: number;
+  overlapSentences: number;
+}
+
+interface ParsedHeading {
+  level: number;
+  text: string;
+  lineNumber: number;
+}
+
+/**
+ * Split markdown into header-aware chunks with line metadata.
+ *
+ * @param content - Raw markdown content.
+ * @param filePath - Vault-relative file path used for stable chunk ids.
+ * @param options - Chunking configuration.
+ * @returns Structured chunks ready for indexing.
+ */
+export function chunkDocument(
+  content: string,
+  filePath: string,
+  options: ChunkDocumentOptions
+): VaultChunk[] {
+  const normalizedOptions = {
+    maxChunkTokens: Math.max(1, options.maxChunkTokens),
+    overlapSentences: Math.max(0, options.overlapSentences),
+  };
+  const lines = content.split(/\r?\n/);
+  const startLine = findFrontmatterEndLine(lines);
+  const bodyLines = lines.slice(startLine);
+  const headings = parseHeadings(bodyLines, startLine);
+  const sections = buildSections(bodyLines, headings, startLine);
+  const chunks: VaultChunk[] = [];
+
+  sections.forEach((section) => {
+    const text = section.lines.join("\n").trim();
+    if (!text) {
+      return;
+    }
+
+    const windows = splitSectionIntoWindows(text, normalizedOptions);
+    windows.forEach((window) => {
+      const chunkText = window.trim();
+      if (!chunkText) {
+        return;
+      }
+
+      chunks.push({
+        id: `${filePath}#${chunks.length}`,
+        documentPath: filePath,
+        content: chunkText,
+        headingPath: section.headingPath,
+        startLine: section.startLine,
+        endLine: section.endLine,
+        metadata: {
+          documentTags: [],
+          documentModifiedAt: 0,
+          documentWordCount: countWords(chunkText),
+          documentTitleDate: undefined,
+          sectionHeadings: section.headingPath,
+        },
+      });
+    });
+  });
+
+  return chunks;
+}
+
+function findFrontmatterEndLine(lines: string[]): number {
+  if (lines[0]?.trim() !== "---") {
+    return 0;
+  }
+
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trim() === "---") {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function parseHeadings(lines: string[], offset: number): ParsedHeading[] {
+  const headings: ParsedHeading[] = [];
+  let inCodeFence = false;
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      inCodeFence = !inCodeFence;
+      return;
+    }
+    if (inCodeFence) {
+      return;
+    }
+
+    const match = trimmed.match(/^(#{1,6})\s+(.+?)\s*#*$/);
+    if (match) {
+      headings.push({
+        level: match[1].length,
+        text: match[2].trim(),
+        lineNumber: offset + index + 1,
+      });
+    }
+  });
+
+  return headings;
+}
+
+function buildSections(
+  lines: string[],
+  headings: ParsedHeading[],
+  offset: number
+): Array<{
+  headingPath: string[];
+  lines: string[];
+  startLine: number;
+  endLine: number;
+}> {
+  if (headings.length === 0) {
+    return [
+      {
+        headingPath: [],
+        lines,
+        startLine: offset + 1,
+        endLine: offset + lines.length,
+      },
+    ];
+  }
+
+  const sections: Array<{
+    headingPath: string[];
+    lines: string[];
+    startLine: number;
+    endLine: number;
+  }> = [];
+  const headingPath: ParsedHeading[] = [];
+
+  headings.forEach((heading, index) => {
+    while (headingPath.length >= heading.level) {
+      headingPath.pop();
+    }
+    headingPath.push(heading);
+
+    const nextHeading = headings[index + 1];
+    const startIndex = heading.lineNumber - offset - 1;
+    const endIndex = nextHeading ? nextHeading.lineNumber - offset - 1 : lines.length;
+    const sectionLines = lines.slice(startIndex, endIndex);
+
+    sections.push({
+      headingPath: headingPath.map((item) => item.text),
+      lines: sectionLines,
+      startLine: heading.lineNumber,
+      endLine: nextHeading ? nextHeading.lineNumber - 1 : offset + lines.length,
+    });
+  });
+
+  return sections;
+}
+
+function splitSectionIntoWindows(text: string, options: ChunkDocumentOptions): string[] {
+  const paragraphs = text.split(/\n\s*\n/).filter((paragraph) => paragraph.trim().length > 0);
+  const windows: string[] = [];
+  let currentWindow = "";
+  let previousSentences: string[] = [];
+
+  const flush = () => {
+    if (currentWindow.trim()) {
+      windows.push(currentWindow.trim());
+      previousSentences = splitIntoSentences(currentWindow).slice(-options.overlapSentences);
+    }
+    currentWindow = previousSentences.join(" ").trim();
+  };
+
+  paragraphs.forEach((paragraph) => {
+    if (countWords(paragraph) > options.maxChunkTokens) {
+      splitOversizedParagraph(paragraph, options).forEach((sentenceWindow) => {
+        if (countWords(joinChunkText(currentWindow, sentenceWindow)) > options.maxChunkTokens) {
+          flush();
+        }
+        currentWindow = joinChunkText(currentWindow, sentenceWindow);
+      });
+      return;
+    }
+
+    const candidate = joinChunkText(currentWindow, paragraph);
+    if (countWords(candidate) > options.maxChunkTokens && currentWindow.trim()) {
+      flush();
+    }
+    currentWindow = joinChunkText(currentWindow, paragraph);
+  });
+
+  if (currentWindow.trim()) {
+    windows.push(currentWindow.trim());
+  }
+
+  return windows;
+}
+
+function splitOversizedParagraph(paragraph: string, options: ChunkDocumentOptions): string[] {
+  const sentences = splitIntoSentences(paragraph);
+  if (sentences.length <= 1) {
+    return [paragraph.trim()];
+  }
+
+  const windows: string[] = [];
+  let current = "";
+  let overlap: string[] = [];
+
+  const flush = () => {
+    if (current.trim()) {
+      windows.push(current.trim());
+      overlap = splitIntoSentences(current).slice(-options.overlapSentences);
+    }
+    current = overlap.join(" ").trim();
+  };
+
+  sentences.forEach((sentence) => {
+    const candidate = joinChunkText(current, sentence);
+    if (countWords(candidate) > options.maxChunkTokens && current.trim()) {
+      flush();
+    }
+    current = joinChunkText(current, sentence);
+  });
+
+  if (current.trim()) {
+    windows.push(current.trim());
+  }
+
+  return windows;
+}
+
+function splitIntoSentences(text: string): string[] {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+}
+
+function joinChunkText(current: string, next: string): string {
+  if (!current.trim()) {
+    return next.trim();
+  }
+  if (!next.trim()) {
+    return current.trim();
+  }
+  return `${current.trim()}\n\n${next.trim()}`;
+}
+
+function countWords(text: string): number {
+  return text.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+}
 
 /**
  * Simple chunk manager with Map-based cache (no LRU for day 1)
@@ -589,10 +845,7 @@ export class ChunkManager {
    * Calculate content hash for integrity validation
    */
   private calculateContentHash(content: string): string {
-    // Lightweight hash using length + content sample for cache validation
-    const lengthHex = content.length.toString(16);
-    const contentSample = content.slice(0, 32).replace(/\s/g, "").substring(0, 8);
-    return lengthHex + contentSample;
+    return MD5(content).toString();
   }
 
   /**

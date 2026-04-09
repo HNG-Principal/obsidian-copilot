@@ -9,7 +9,9 @@ export const ToolSettingsSection: React.FC = () => {
   const settings = useSettingsValue();
   const registry = ToolRegistry.getInstance();
 
-  const enabledToolIds = new Set(settings.autonomousAgentEnabledToolIds || []);
+  const enabledToolIds = new Set(
+    settings.enabledTools || settings.autonomousAgentEnabledToolIds || []
+  );
 
   // Get configurable tools grouped by category
   const toolsByCategory = registry.getToolsByCategory();
@@ -23,7 +25,7 @@ export const ToolSettingsSection: React.FC = () => {
       newEnabledIds.delete(toolId);
     }
 
-    updateSetting("autonomousAgentEnabledToolIds", Array.from(newEnabledIds));
+    updateSetting("enabledTools", Array.from(newEnabledIds));
   };
 
   /**
@@ -38,7 +40,7 @@ export const ToolSettingsSection: React.FC = () => {
         newEnabledIds.delete(metadata.id);
       }
     }
-    updateSetting("autonomousAgentEnabledToolIds", Array.from(newEnabledIds));
+    updateSetting("enabledTools", Array.from(newEnabledIds));
   };
 
   const renderToolsByCategory = () => {
@@ -105,14 +107,22 @@ export const ToolSettingsSection: React.FC = () => {
       <SettingItem
         type="slider"
         title="Max Iterations"
-        description="Maximum number of reasoning iterations the autonomous agent can perform. Higher values allow for more complex reasoning but may take longer."
-        value={settings.autonomousAgentMaxIterations ?? 4}
+        description="Maximum number of agent turns the autonomous agent can perform. Higher values allow more tool chaining but can take longer."
+        value={settings.maxAgentTurns ?? settings.autonomousAgentMaxIterations ?? 4}
         onChange={(value) => {
-          updateSetting("autonomousAgentMaxIterations", value);
+          updateSetting("maxAgentTurns", value);
         }}
-        min={4}
-        max={AGENT_MAX_ITERATIONS_LIMIT}
+        min={1}
+        max={Math.min(25, AGENT_MAX_ITERATIONS_LIMIT)}
         step={1}
+      />
+
+      <SettingItem
+        type="switch"
+        title="Require Tool Approval"
+        description="Ask for confirmation before destructive agent tools execute. Read-only tools continue to auto-run."
+        checked={settings.requireToolApproval}
+        onCheckedChange={(checked) => updateSetting("requireToolApproval", checked)}
       />
 
       <div className="tw-mt-4 tw-rounded-lg tw-bg-secondary tw-p-4">

@@ -3,7 +3,7 @@ import { Platform, TFolder, TFile } from "obsidian";
 import { FileText, Wrench, Folder, FileClock, Globe, CircleDashed } from "lucide-react";
 import fuzzysort from "fuzzysort";
 import { getToolDescription } from "@/tools/toolManager";
-import { AVAILABLE_TOOLS } from "../constants/tools";
+import { getAvailableTools } from "../constants/tools";
 import { useAllNotes } from "./useAllNotes";
 import { useAllFolders } from "./useAllFolders";
 import { useOpenWebTabs } from "./useOpenWebTabs";
@@ -60,7 +60,7 @@ export function useAtMentionSearch(
   const toolItems: AtMentionOption[] = useMemo(
     () =>
       isCopilotPlus
-        ? AVAILABLE_TOOLS.map((tool) => ({
+        ? getAvailableTools().map((tool) => ({
             key: `tool-${tool}`,
             title: tool,
             subtitle: getToolDescription(tool),

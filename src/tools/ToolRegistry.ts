@@ -1,4 +1,7 @@
 import { StructuredTool } from "@langchain/core/tools";
+import { toJsonSchema } from "@langchain/core/utils/json_schema";
+import { isInteropZodSchema } from "@langchain/core/utils/types";
+import { ToolApprovalCategory } from "@/tools/types";
 
 /**
  * Tool metadata for registration and UI display.
@@ -9,6 +12,8 @@ export interface ToolMetadata {
   displayName: string;
   description: string;
   category: "search" | "time" | "file" | "media" | "mcp" | "memory" | "custom" | "cli";
+  approvalCategory?: ToolApprovalCategory;
+  enabled?: boolean;
   isAlwaysEnabled?: boolean; // Tools that are always available (e.g., time tools)
   requiresVault?: boolean; // Tools that need vault access
   customPromptInstructions?: string; // Optional custom instructions for this tool
@@ -48,7 +53,14 @@ export class ToolRegistry {
    * Register a tool with the registry
    */
   register(definition: ToolDefinition): void {
-    this.tools.set(definition.metadata.id, definition);
+    this.tools.set(definition.metadata.id, {
+      ...definition,
+      metadata: {
+        ...definition.metadata,
+        approvalCategory: definition.metadata.approvalCategory ?? "auto",
+        enabled: definition.metadata.enabled ?? true,
+      },
+    });
   }
 
   /**
@@ -74,6 +86,10 @@ export class ToolRegistry {
 
     for (const [id, definition] of this.tools) {
       const { metadata, tool } = definition;
+
+      if (metadata.enabled === false) {
+        continue;
+      }
 
       // Always include tools marked as always enabled
       if (metadata.isAlwaysEnabled) {
@@ -145,6 +161,56 @@ export class ToolRegistry {
     }
 
     return mappings;
+  }
+
+  /**
+   * Update a tool's enabled state inside the registry.
+   * This is primarily used by UI affordances that need the registry to reflect runtime state.
+   *
+   * @param id - Tool metadata ID.
+   * @param enabled - Whether the tool should be enabled.
+   */
+  setEnabled(id: string, enabled: boolean): void {
+    const definition = this.tools.get(id);
+
+    if (!definition) {
+      return;
+    }
+
+    this.tools.set(id, {
+      ...definition,
+      metadata: {
+        ...definition.metadata,
+        enabled,
+      },
+    });
+  }
+
+  /**
+   * Build a prompt-friendly description of all enabled tools, including schema and aliases.
+   *
+   * @returns Human-readable tool descriptions suitable for system prompt composition.
+   */
+  getToolDescriptions(): string {
+    return Array.from(this.tools.values())
+      .filter(({ metadata }) => metadata.enabled !== false)
+      .map(({ tool, metadata }) => {
+        const schema = tool.schema
+          ? isInteropZodSchema(tool.schema)
+            ? toJsonSchema(tool.schema)
+            : tool.schema
+          : undefined;
+        const aliases = metadata.copilotCommands?.length
+          ? `aliases: ${metadata.copilotCommands.join(", ")}`
+          : null;
+        const approval = `approval: ${metadata.approvalCategory ?? "auto"}`;
+        const schemaLine = schema ? `schema: ${JSON.stringify(schema)}` : null;
+
+        return [`${metadata.id}: ${metadata.description}`, aliases, approval, schemaLine]
+          .filter(Boolean)
+          .join("\n");
+      })
+      .join("\n\n");
   }
 
   /**

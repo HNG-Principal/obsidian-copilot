@@ -45,6 +45,8 @@ export const CONTEXT_BLOCK_TYPES: ContextBlockType[] = [
 
   // Web content (recoverable via /url command)
   { tag: "url_content", sourceType: "url", recoverable: true, sourceExtractor: "url" },
+  { tag: "web-content", sourceType: "url", recoverable: true, sourceExtractor: "url" },
+  { tag: "web-search", sourceType: "url", recoverable: true, sourceExtractor: null },
   { tag: "web_tab_context", sourceType: "url", recoverable: true, sourceExtractor: "url" },
   { tag: "active_web_tab", sourceType: "url", recoverable: true, sourceExtractor: "url" },
 
@@ -127,7 +129,16 @@ export function extractSourceFromBlock(xmlBlock: string, tag: string): string {
   const extractorTag = blockType.sourceExtractor;
   const regex = new RegExp(`<${extractorTag}>([^<]+)</${extractorTag}>`);
   const match = regex.exec(xmlBlock);
-  return match?.[1] ?? "";
+  if (match?.[1]) {
+    return match[1];
+  }
+
+  if (extractorTag === "url") {
+    const attributeMatch = /\surl="([^"]+)"/.exec(xmlBlock);
+    return attributeMatch?.[1] ?? "";
+  }
+
+  return "";
 }
 
 /**

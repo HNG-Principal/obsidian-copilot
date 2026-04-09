@@ -17,6 +17,7 @@ export const DEFAULT_CUSTOM_PROMPTS_FOLDER = `${COPILOT_FOLDER_ROOT}/copilot-cus
 export const DEFAULT_MEMORY_FOLDER = `${COPILOT_FOLDER_ROOT}/memory`;
 export const DEFAULT_SYSTEM_PROMPTS_FOLDER = `${COPILOT_FOLDER_ROOT}/system-prompts`;
 export const DEFAULT_CONVERTED_DOC_OUTPUT_FOLDER = "";
+export const DEFAULT_YOUTUBE_TRANSCRIPT_OUTPUT_FOLDER = "YouTube Transcripts";
 export const DEFAULT_QA_EXCLUSIONS_SETTING = COPILOT_FOLDER_ROOT;
 export const DEFAULT_SYSTEM_PROMPT = `You are Obsidian Copilot, a helpful assistant that integrates AI to Obsidian note-taking.
   1. Never mention that you do not have access to something. Always rely on the user provided context.
@@ -968,14 +969,39 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   selfHostUrl: "",
   selfHostApiKey: "",
   miyoServerUrl: "",
+  webSearchProvider: "firecrawl",
   selfHostSearchProvider: "firecrawl",
+  searxngUrl: "",
   firecrawlApiKey: "",
   perplexityApiKey: "",
+  urlCacheTTLHours: 24,
+  maxUrlCacheEntries: 100,
+  urlExtractionTimeoutMs: 10000,
   supadataApiKey: "",
+  preferredTranscriptLanguage: "en",
+  youtubeTranscriptTimestamps: true,
+  youtubeTranscriptOutputFolder: DEFAULT_YOUTUBE_TRANSCRIPT_OUTPUT_FOLDER,
+  youtubeTranscriptCacheTTLHours: 168,
+  audioTranscriptionProvider: "brevilabs",
   enableLexicalBoosts: true,
+  hybridSearchTextWeight: 0.3,
+  enableReranking: true,
+  maxChunkTokens: 512,
   suggestedDefaultCommands: false,
   autonomousAgentMaxIterations: 4,
+  maxAgentTurns: 10,
+  requireToolApproval: true,
   autonomousAgentEnabledToolIds: [
+    "localSearch",
+    "readNote",
+    "webSearch",
+    "pomodoro",
+    "youtubeTranscription",
+    "writeFile",
+    "editFile",
+    "updateMemory",
+  ],
+  enabledTools: [
     "localSearch",
     "readNote",
     "webSearch",
@@ -1000,6 +1026,7 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   userSystemPromptsFolder: DEFAULT_SYSTEM_PROMPTS_FOLDER,
   defaultSystemPromptTitle: "",
   autoCompactThreshold: 128000,
+  maxFileSizeMB: 50,
   convertedDocOutputFolder: DEFAULT_CONVERTED_DOC_OUTPUT_FOLDER,
 };
 
