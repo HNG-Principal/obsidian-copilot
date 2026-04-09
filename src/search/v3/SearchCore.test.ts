@@ -69,7 +69,7 @@ jest.mock("./chunks", () => {
   };
 });
 
-import { SearchCore, selectDiverseTopK } from "./SearchCore";
+import { SearchCore, computeFusionScore, selectDiverseTopK } from "./SearchCore";
 
 describe("SearchCore retrieve", () => {
   let mockApp: any;
@@ -227,5 +227,24 @@ describe("selectDiverseTopK", () => {
     for (let i = 1; i < selected.length; i++) {
       expect(selected[i].score).toBeLessThanOrEqual(selected[i - 1].score);
     }
+  });
+});
+
+describe("computeFusionScore", () => {
+  it("should fuse semantic and lexical rankings by reciprocal rank", () => {
+    const fused = computeFusionScore(
+      [
+        { id: "a", score: 0.9 },
+        { id: "b", score: 0.8 },
+      ],
+      [
+        { id: "b", score: 0.95 },
+        { id: "c", score: 0.7 },
+      ],
+      10
+    );
+
+    expect(fused[0].id).toBe("b");
+    expect(fused.map((item) => item.id)).toEqual(expect.arrayContaining(["a", "b", "c"]));
   });
 });

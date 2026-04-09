@@ -1,4 +1,4 @@
-import { hasSelfHostSearchKey, selfHostWebSearch } from "./selfHostServices";
+import { hasSelfHostSearchKey, selfHostRerank, selfHostWebSearch } from "./selfHostServices";
 
 // --- Mocks ---
 
@@ -29,6 +29,9 @@ beforeEach(() => {
     firecrawlApiKey: "fc-test-key",
     perplexityApiKey: "",
     supadataApiKey: "",
+    selfHostUrl: "http://localhost:8742",
+    selfHostApiKey: "self-host-key",
+    plusLicenseKey: "",
   });
 });
 
@@ -328,5 +331,86 @@ describe("selfHostWebSearch — provider dispatch", () => {
       "https://api.firecrawl.dev/v2/search",
       expect.any(Object)
     );
+  });
+});
+
+describe("selfHostRerank", () => {
+  beforeEach(() => {
+    mockGetSettings.mockReturnValue({
+      selfHostSearchProvider: "firecrawl",
+      firecrawlApiKey: "fc-test-key",
+      perplexityApiKey: "",
+      supadataApiKey: "",
+      selfHostUrl: "http://localhost:8742",
+      selfHostApiKey: "self-host-key",
+      plusLicenseKey: "",
+    });
+  });
+
+  it("uses the versioned self-host rerank endpoint when available", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        results: [
+          { index: 1, score: 0.9 },
+          { index: 0, score: 0.2 },
+        ],
+        model: "self-host-rerank",
+      }),
+    });
+
+    const result = await selfHostRerank("find best result", ["doc a", "doc b"]);
+
+    expect(mockFetch).toHaveBeenCalledWith("http://localhost:8742/v0/rerank", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer self-host-key",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: "find best result",
+        documents: ["doc a", "doc b"],
+        model: "rerank-2",
+      }),
+    });
+    expect(result.response.data).toEqual([
+      { index: 1, relevance_score: 0.9 },
+      { index: 0, relevance_score: 0.2 },
+    ]);
+  });
+
+  it("falls back to the legacy rerank endpoint on 404", async () => {
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () => "Not found",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          response: {
+            object: "list",
+            data: [{ index: 0, relevance_score: 0.7 }],
+            model: "legacy-rerank",
+            usage: { total_tokens: 12 },
+          },
+          elapsed_time_ms: 5,
+        }),
+      });
+
+    const result = await selfHostRerank("query", ["doc a"]);
+
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "http://localhost:8742/v0/rerank",
+      expect.any(Object)
+    );
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:8742/rerank",
+      expect.any(Object)
+    );
+    expect(result.response.model).toBe("legacy-rerank");
   });
 });

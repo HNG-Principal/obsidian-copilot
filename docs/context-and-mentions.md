@@ -109,9 +109,23 @@ Use the command palette: **Add web selection to chat context**
 
 Works similarly but captures selected text from the Web Viewer. Available on desktop only.
 
-### Adding a PDF as Context (Copilot Plus)
+### Adding Documents as Context (Copilot Plus)
 
-Click the **+ Add context** button above the chat input to attach a PDF file. The PDF is converted to text and included as context for your message.
+Click the **+ Add context** button above the chat input to attach a supported non-markdown file. Copilot converts the file to markdown and includes it as context for your message.
+
+Supported formats include:
+
+- **PDFs**
+- **Word documents** (`.docx`, `.doc`)
+- **PowerPoint presentations** (`.pptx`, `.ppt`)
+- **Excel spreadsheets** (`.xlsx`, `.xls`)
+- **Delimited text files** (`.csv`, `.tsv`)
+- **EPUB ebooks**
+- **Supported image files** such as `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, and `.webp` (some setups may also support `.svg`)
+
+For image attachments, Copilot reads the visible text using OCR. This works best when your selected model supports **Vision**. Some image types may also depend on your current parser support.
+
+Behind the scenes, Copilot keeps the converted text grouped with the original file name and document type so the AI can tell which attachment it came from.
 
 ### Adding an Image as Context
 

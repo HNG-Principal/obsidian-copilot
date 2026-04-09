@@ -1,0 +1,11 @@
+node_modules/
+coverage/
+.git/
+.github/
+.vscode/
+.specify/
+specs/
+designdocs/
+TODO.md
+*.log
+*.map

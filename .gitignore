@@ -29,5 +29,12 @@ data.json
 .claude/settings.local.json
 .claude/worktrees/
 
+# Build artifacts and caches
+dist/
+build/
+coverage/
+*.log
+.env*
+
 # Development session tracking
 TODO.md

@@ -45,9 +45,11 @@ import { useIsPlusUser } from "@/plusUtils";
 import { updateSetting, useSettingsValue } from "@/settings/model";
 import { ChatUIState } from "@/state/ChatUIState";
 import { FileParserManager } from "@/tools/FileParserManager";
+import { getConversionErrorChatMessage } from "@/tools/parsers/conversionErrorMessages";
 import { ChatMessage } from "@/types/message";
-import { err2String, isPlusChain } from "@/utils";
+import { err2String, formatDateTime, isPlusChain } from "@/utils";
 import { arrayBufferToBase64 } from "@/utils/base64";
+import { formatErrorChunk } from "@/utils/toolResultUtils";
 import { Notice, TFile } from "obsidian";
 import { ContextManageModal } from "@/components/modals/project/context-manage-modal";
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -369,6 +371,18 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       }
     } catch (error) {
       logError("Error sending message:", error);
+      const conversionErrorMessage = getConversionErrorChatMessage(error);
+      if (conversionErrorMessage) {
+        addMessage({
+          id: uuidv4(),
+          sender: AI_SENDER,
+          isErrorMessage: true,
+          message: formatErrorChunk(conversionErrorMessage),
+          isVisible: true,
+          timestamp: formatDateTime(new Date()),
+        });
+        return;
+      }
       new Notice("Failed to send message. Please try again.");
     } finally {
       safeSet.setLoading(false);

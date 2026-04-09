@@ -31,7 +31,7 @@ jest.mock("@/logger", () => ({
 }));
 
 import { TFile } from "obsidian";
-import { ChunkManager, ChunkOptions } from "./chunks";
+import { ChunkManager, ChunkOptions, chunkDocument } from "./chunks";
 
 describe("ChunkManager", () => {
   let chunkManager: ChunkManager;
@@ -717,5 +717,64 @@ describe("ChunkManager", () => {
         expect(generatedId).toBe(`test.md#${testCase.expected}`);
       }
     });
+  });
+});
+
+describe("chunkDocument", () => {
+  it("should strip frontmatter and keep heading breadcrumbs", () => {
+    const markdown = `---
+tags: [project]
+---
+
+# Parent
+
+Intro paragraph.
+
+## Child
+
+More detail here.`;
+
+    const chunks = chunkDocument(markdown, "notes/example.md", {
+      maxChunkTokens: 50,
+      overlapSentences: 1,
+    });
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0].content).not.toContain("tags: [project]");
+    expect(chunks[0].headingPath).toEqual(["Parent"]);
+    expect(chunks[1].headingPath).toEqual(["Parent", "Child"]);
+  });
+
+  it("should preserve source line metadata", () => {
+    const markdown = `# Intro
+
+First block.
+
+## Details
+
+Second block.`;
+
+    const chunks = chunkDocument(markdown, "notes/lines.md", {
+      maxChunkTokens: 50,
+      overlapSentences: 0,
+    });
+
+    expect(chunks[0].startLine).toBe(1);
+    expect(chunks[0].endLine).toBeGreaterThanOrEqual(chunks[0].startLine);
+    expect(chunks[1].startLine).toBe(5);
+  });
+
+  it("should split oversized sections with sentence overlap", () => {
+    const markdown = `# Intro
+
+Sentence one. Sentence two. Sentence three. Sentence four. Sentence five.`;
+
+    const chunks = chunkDocument(markdown, "notes/overlap.md", {
+      maxChunkTokens: 4,
+      overlapSentences: 1,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[1].content).toContain("Sentence");
   });
 });
