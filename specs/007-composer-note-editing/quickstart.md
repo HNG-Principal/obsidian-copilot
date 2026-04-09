@@ -59,14 +59,12 @@ Modify `src/tools/ComposerTools.ts`:
 - Multi-operation support: LLM can generate multiple edit tool calls forming one plan
 - Preserve existing tool signatures for backwards compatibility
 
-### Step 6: Multi-File Diff Preview
+### Step 6: Diff Preview & EditPlan Integration
 
-Modify `src/components/composer/ApplyViewRoot.tsx`:
+Modify `src/components/composer/ApplyView.tsx`:
 
-- File tabs/list when edit plan affects multiple files
-- Per-file diff view (reuse existing DiffView)
-- Accept/Reject per file or all-at-once
-- Streaming: show diffs as operations arrive
+- Accept optional `EditPlan` field in `ApplyViewState`
+- Wire `ApplyViewRoot` accept handler to call `EditExecutor.applyPlan()` when an EditPlan is present
 - Undo button in the accept toolbar
 
 ### Step 7: Settings and Integration

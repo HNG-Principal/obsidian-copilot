@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 import { logError } from "@/logger";
 import { getSettings, updateSetting } from "@/settings/model";
 import { Change, diffArrays } from "diff";
-import { Check, X as XIcon } from "lucide-react";
+import { Check, X as XIcon, Undo } from "lucide-react";
 import { App, ItemView, Notice, TFile, WorkspaceLeaf } from "obsidian";
 import React, { memo, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -11,6 +11,7 @@ import { SettingSwitch } from "../ui/setting-switch";
 import { getChangeBlocks } from "@/composerUtils";
 import { ApplyViewResult } from "@/types";
 import { ensureFolderExists } from "@/utils";
+import { EditPlan } from "@/core/editPlanner";
 
 /** Represents a row in the diff view with original and modified content */
 interface DiffRow {
@@ -197,6 +198,8 @@ export interface ApplyViewState {
   resultCallback?: (result: ApplyViewResult) => void;
   /** When true, hides per-block accept/reject buttons (used by editFile) */
   simple?: boolean;
+  /** Optional EditPlan for Composer edit integration */
+  editPlan?: EditPlan;
 }
 
 // Extended Change interface to track user acceptance
@@ -385,6 +388,9 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
   // Add refs to track change blocks
   const blockRefs = useRef<(HTMLDivElement | null)[]>([]);
 
+  // Add undo state
+  const [showUndoButton, setShowUndoButton] = useState(false);
+
   // Add defensive check for state after hooks
   if (!state || !state.changes) {
     logError("Invalid state:", state);
@@ -398,6 +404,33 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
     );
   }
 
+  // Handle undo - restore the note to its pre-edit state
+  const handleUndo = async () => {
+    try {
+      // Import UndoManager dynamically to avoid circular dependencies
+      const { UndoManager } = await import("@/core/undoManager");
+      const { EditExecutor } = await import("@/core/editExecutor");
+
+      const undoManager = UndoManager.getInstance();
+      // EditExecutor is instantiated but not used directly in this handler
+      // It's used internally by UndoManager for rollback operations
+      void new EditExecutor(undoManager, app.vault, app);
+
+      const undone = await undoManager.undo(app.vault, app);
+
+      if (undone) {
+        new Notice(`Undo successful: ${undone.description}`);
+        setShowUndoButton(false);
+        close("accepted");
+      } else {
+        new Notice("Nothing to undo");
+      }
+    } catch (error) {
+      logError("Error undoing:", error);
+      new Notice(`Undo failed: ${error.message}`);
+    }
+  };
+
   // Apply all changes regardless of whether they have been marked as accepted
   const handleAccept = async () => {
     try {
@@ -407,6 +440,10 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
       );
 
       const result = await applyDecidedChangesToFile(updatedDiff);
+
+      // Show undo button after accepting
+      setShowUndoButton(true);
+
       close(result ? "accepted" : "failed"); // Pass result
     } catch (error) {
       logError("Error applying changes:", error);
@@ -562,6 +599,12 @@ const ApplyViewRoot: React.FC<ApplyViewRootProps> = ({ app, state, close }) => {
           <Check className="tw-size-4" />
           Accept
         </Button>
+        {showUndoButton && (
+          <Button variant="secondary" size="sm" onClick={handleUndo}>
+            <Undo className="tw-size-4" />
+            Undo
+          </Button>
+        )}
       </div>
       <div className="tw-flex tw-items-center tw-justify-between tw-border-b tw-border-solid tw-border-border tw-p-2">
         <div className="tw-text-sm tw-font-medium">{state.path}</div>

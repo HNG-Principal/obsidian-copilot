@@ -131,7 +131,9 @@ streaming → failed (LLM error during generation)
 applied → undone (via undo manager)
 ```
 
-### Per-File Edit State (within multi-file plan)
+### Per-File Edit State (within edit plan)
+
+> **v1 Note**: v1 scope is single-note per spec assumption. The per-file state machine below applies to the single target file. Multi-file support is a future extension.
 
 ```
 pending → diffing → previewed → accepted
@@ -142,11 +144,11 @@ pending → diffing → previewed → accepted
 
 ## Access Patterns
 
-| Operation            | Frequency                    | Method                            |
-| -------------------- | ---------------------------- | --------------------------------- |
-| Create edit plan     | Per LLM edit response        | `editPlanner.createPlan()`        |
-| Preview diff         | Per edit plan                | `DiffView` component rendering    |
-| Apply edit plan      | Per user accept              | `editExecutor.applyPlan()`        |
-| Create undo snapshot | Before each apply            | `undoManager.createSnapshot()`    |
-| Undo last edit       | Per user undo action         | `undoManager.undo()`              |
-| Check oldText exists | Per replace/delete operation | `editPlanner.validateOperation()` |
+| Operation            | Frequency                    | Method                                                         |
+| -------------------- | ---------------------------- | -------------------------------------------------------------- |
+| Create edit plan     | Per LLM edit response        | Inline `EditPlan` construction in `ComposerTools` (T012/T013)  |
+| Preview diff         | Per edit plan                | `ApplyView` component rendering (existing diff sub-components) |
+| Apply edit plan      | Per user accept              | `editExecutor.applyPlan()`                                     |
+| Create undo snapshot | Before each apply            | `undoManager.createSnapshot()`                                 |
+| Undo last edit       | Per user undo action         | `undoManager.undo()`                                           |
+| Check oldText exists | Per replace/delete operation | `editPlanner.validateOperation()`                              |

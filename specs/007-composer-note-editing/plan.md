@@ -5,18 +5,18 @@
 
 ## Summary
 
-Chat-driven note editing system that allows the LLM to propose edits to vault notes, preview them with a visual diff, and apply/reject with full undo support. Extends the existing `ComposerTools` (`editFileTool`, `writeFileTool`), `ApplyView` component (diff preview + accept/reject), and editor integration (selection highlighting, quick-ask). Adds multi-file atomic edits, persistent undo snapshots, and streaming edit preview.
+Chat-driven note editing system that allows the LLM to propose edits to vault notes, preview them with a visual diff, and apply/reject with full undo support. Extends the existing `ComposerTools` (`editFileTool`, `writeFileTool`), `ApplyView` component (diff preview + accept/reject), and editor integration (selection highlighting, quick-ask). The data model supports multi-file edit plans for future extensibility, but v1 scope is single-note editing per the spec. Undo snapshots are stored in-memory per session. Streaming edit preview is deferred to v2.
 
 ## Technical Context
 
 **Language/Version**: TypeScript (strict mode) targeting ES2018+
 **Primary Dependencies**: React 18, Radix UI, Tailwind CSS + CVA, LangChain, Jotai, Obsidian Plugin API
-**Storage**: Undo snapshots in memory (per session), optional persistence in `.copilot/undo/` for recovery
+**Storage**: Undo snapshots in memory (per session) — not persisted across restarts
 **Testing**: Jest + unit tests adjacent to implementation
 **Target Platform**: Obsidian desktop plugin (Electron)
 **Project Type**: Obsidian plugin (single-bundle, esbuild)
-**Performance Goals**: Edit preview <2s (SC-001), undo operation <500ms (SC-002)
-**Constraints**: Must integrate with Obsidian's native editor API, edits must be undoable at Obsidian's undo stack level where possible, multi-file edits atomic (all-or-nothing apply)
+**Performance Goals**: Edit preview rendering <2s, undo operation <500ms (internal targets; see spec SC-001 through SC-005 for formal success criteria)
+**Constraints**: Must integrate with Obsidian's native editor API, edits must be undoable at Obsidian's undo stack level where possible, edit plans applied atomically (all-or-nothing). v1 scope: single-note per spec assumption
 **Scale/Scope**: ~6 modified/new files, extends existing composer infrastructure
 
 ## Constitution Check
@@ -63,13 +63,12 @@ src/
 │   └── ComposerTools.ts                   # MODIFIED — use editPlanner for edit computation
 ├── components/
 │   └── composer/                          # EXISTING — diff preview, accept/reject UI
-│       ├── ApplyViewRoot.tsx              # MODIFIED — support multi-file edit preview
-│       └── DiffView.tsx                   # EXISTING — reused for diff rendering
+│       └── ApplyView.tsx                  # MODIFIED — contains ApplyView class + ApplyViewRoot component; wire EditPlan support
 ├── editor/
 │   ├── chatSelectionHighlightController.ts  # EXISTING — selection highlighting
 │   └── quickAskExtension.ts              # EXISTING — quick-ask integration
 └── settings/
-    └── model.ts                           # MODIFIED — add auto-apply threshold setting
+    └── model.ts                           # MODIFIED — add maxUndoSnapshots setting
 ```
 
 **Structure Decision**: New `editPlanner.ts`, `editExecutor.ts`, and `undoManager.ts` go in `src/core/` alongside existing `ChatManager.ts` and `MessageRepository.ts`. These are core business logic modules, not services or tools.

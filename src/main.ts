@@ -162,6 +162,10 @@ export default class CopilotPlugin extends Plugin {
     this.registerView(CHAT_VIEWTYPE, (leaf: WorkspaceLeaf) => new CopilotView(leaf, this));
     this.registerView(APPLY_VIEW_TYPE, (leaf: WorkspaceLeaf) => new ApplyView(leaf));
 
+    // Initialize EditExecutor with app and vault
+    const { initEditExecutor } = await import("@/tools/ComposerTools");
+    initEditExecutor(this.app, this.app.vault);
+
     this.initActiveLeafChangeHandler();
 
     this.addRibbonIcon("message-square", "Open Copilot Chat", (evt: MouseEvent) => {
@@ -222,6 +226,14 @@ export default class CopilotPlugin extends Plugin {
   }
 
   async onunload() {
+    // Clear UndoManager snapshots before unload
+    try {
+      const { UndoManager } = await import("@/core/undoManager");
+      UndoManager.reset();
+    } catch {
+      // Ignore errors during unload
+    }
+
     // Clear all persistent selection highlights before unload
     // This prevents "stuck" highlights after hot reload (dev environment)
     this.clearAllPersistentSelectionHighlights();

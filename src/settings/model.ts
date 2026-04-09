@@ -198,6 +198,8 @@ export interface CopilotSettings {
   reasoningEffort: "minimal" | "low" | "medium" | "high";
   /** Default verbosity level for models that support it */
   verbosity: "low" | "medium" | "high";
+  /** Maximum number of undo snapshots to keep (5-50, default 20) */
+  maxUndoSnapshots: number;
   /** Folder where memory data is stored */
   memoryFolderName: string;
   /** Reference recent conversation history to provide more contextually relevant responses */
@@ -784,6 +786,14 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   // Ensure autoAcceptEdits has a default value
   if (typeof sanitizedSettings.autoAcceptEdits !== "boolean") {
     sanitizedSettings.autoAcceptEdits = DEFAULT_SETTINGS.autoAcceptEdits;
+  }
+
+  // Ensure maxUndoSnapshots has a valid value (5-50 range)
+  const maxUndoSnapshots = Number(settingsToSanitize.maxUndoSnapshots);
+  if (isNaN(maxUndoSnapshots)) {
+    sanitizedSettings.maxUndoSnapshots = DEFAULT_SETTINGS.maxUndoSnapshots;
+  } else {
+    sanitizedSettings.maxUndoSnapshots = Math.min(50, Math.max(5, maxUndoSnapshots));
   }
 
   // Ensure defaultSendShortcut has a valid value

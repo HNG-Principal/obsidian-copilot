@@ -135,3 +135,4 @@ A user writes notes in multiple languages (e.g., English and Spanish). They sear
 - Reranking can use either a cross-encoder model or LLM-based reranking depending on user configuration and available resources.
 - Full-text search relies on the backend's text search capabilities (e.g., tsvector or equivalent).
 - Image and binary content within notes is not indexed for v1 — only markdown text content.
+  /

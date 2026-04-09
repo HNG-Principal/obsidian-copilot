@@ -106,19 +106,7 @@ type GroupOperationsByFile = (operations: EditOperation[]) => Map<string, EditOp
 
 ### Generate Diff Display
 
-```typescript
-/**
- * Generate a human-readable diff between two text contents.
- * Used to populate the DiffView component.
- */
-type GenerateDiff = (originalContent: string, newContent: string) => Array<DiffLine>;
-
-interface DiffLine {
-  type: "unchanged" | "added" | "removed";
-  content: string;
-  lineNumber: { old?: number; new?: number };
-}
-```
+Diff rendering is handled by the existing `diff` library (`diffTrimmedLines`, `diffArrays`) already used in `ApplyView.tsx`. The `ApplyViewRoot` component's sub-components (`SideBySideBlock`, `SplitBlock`, `DiffCell`, `WordDiffSpan`) consume the library output directly. No custom `GenerateDiff` function is needed.
 
 ---
 
@@ -133,8 +121,7 @@ New settings in `CopilotSettings`:
 Existing settings/components reused:
 
 - `ComposerTools.ts` — `editFileTool`, `writeFileTool` (modified to use EditPlanner)
-- `ApplyViewRoot.tsx` — diff preview UI (extended for multi-file)
-- `DiffView.tsx` — diff rendering (reused as-is)
+- `ApplyView.tsx` — contains `ApplyView` class + `ApplyViewRoot` React component (diff preview UI, extended for EditPlan support)
 
 ---
 

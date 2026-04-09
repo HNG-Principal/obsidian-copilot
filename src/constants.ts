@@ -801,6 +801,7 @@ export const COMMAND_IDS = {
   CLEAR_LOG_FILE: "clear-log-file",
   DOWNLOAD_YOUTUBE_SCRIPT: "download-youtube-script",
   TRIGGER_QUICK_ASK: "trigger-quick-ask",
+  UNDO_COPILOT_EDIT: "undo-copilot-edit",
 } as const;
 
 export const COMMAND_NAMES: Record<CommandId, string> = {
@@ -830,6 +831,7 @@ export const COMMAND_NAMES: Record<CommandId, string> = {
   [COMMAND_IDS.CLEAR_LOG_FILE]: "Clear log file",
   [COMMAND_IDS.DOWNLOAD_YOUTUBE_SCRIPT]: "Download YouTube Script (plus)",
   [COMMAND_IDS.TRIGGER_QUICK_ASK]: "Quick Ask",
+  [COMMAND_IDS.UNDO_COPILOT_EDIT]: "Undo last Copilot edit",
 };
 
 export type CommandId = (typeof COMMAND_IDS)[keyof typeof COMMAND_IDS];
@@ -859,6 +861,7 @@ export const COMMAND_ICONS: Partial<Record<CommandId, string>> = {
   [COMMAND_IDS.OPEN_LOG_FILE]: "file-text",
   [COMMAND_IDS.CLEAR_LOG_FILE]: "file-x",
   [COMMAND_IDS.DOWNLOAD_YOUTUBE_SCRIPT]: "youtube",
+  [COMMAND_IDS.UNDO_COPILOT_EDIT]: "undo-2",
 };
 
 /**
@@ -1023,6 +1026,7 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   autoAddSelectionToContext: false,
   autoAcceptEdits: false,
   diffViewMode: "split",
+  maxUndoSnapshots: 20,
   userSystemPromptsFolder: DEFAULT_SYSTEM_PROMPTS_FOLDER,
   defaultSystemPromptTitle: "",
   autoCompactThreshold: 128000,
