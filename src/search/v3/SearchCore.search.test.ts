@@ -145,6 +145,40 @@ describe("SearchCore.search", () => {
     expect(results[0].chunk.headingPath).toEqual(["Projects", "Exact"]);
   });
 
+  it("ranks an exact keyword match ahead of a higher semantic-only match in hybrid mode", async () => {
+    mergedRetrieverDocsMock.mockResolvedValue([
+      makeSemanticDoc("exact-keyword.md", 0.62, 0.98, ["Projects", "Helios"]),
+      makeSemanticDoc("semantic-context.md", 0.93, 0.05, ["Projects", "Solar"]),
+    ]);
+
+    const searchCore = new SearchCore(mockApp as any);
+    const results = await searchCore.search({ queryText: "Project Helios", resultLimit: 2 });
+
+    expect(results[0].documentPath).toBe("exact-keyword.md");
+    expect(results[0].scoreBreakdown.lexicalScore).toBeGreaterThan(
+      results[1].scoreBreakdown.lexicalScore
+    );
+  });
+
+  it("returns semantically relevant notes for natural-language paraphrases", async () => {
+    mergedRetrieverDocsMock.mockResolvedValue([
+      makeSemanticDoc("habits.md", 0.93, 0.1, ["Health", "Habits"]),
+      makeSemanticDoc("calendar.md", 0.35, 0.2, ["Planning"]),
+      makeSemanticDoc("archive.md", 0.12, 0, ["Archive"]),
+    ]);
+
+    const searchCore = new SearchCore(mockApp as any);
+    const results = await searchCore.search({
+      queryText: "that idea about habit stacking from last month",
+      resultLimit: 3,
+    });
+
+    expect(results[0].documentPath).toBe("habits.md");
+    expect(results[0].scoreBreakdown.semanticScore).toBeGreaterThan(
+      results[1].scoreBreakdown.semanticScore
+    );
+  });
+
   it("uses the filter retriever for time-ranged queries", async () => {
     filterRetrieverDocsMock.mockResolvedValue([
       new Document({
@@ -204,5 +238,21 @@ describe("SearchCore.search", () => {
 
     expect(results).toHaveLength(25);
     expect(elapsed).toBeLessThan(2000);
+  });
+
+  it("keeps multilingual semantic results within the top 10", async () => {
+    mergedRetrieverDocsMock.mockResolvedValue([
+      makeSemanticDoc("ml-es.md", 0.91, 0.05, ["Aprendizaje", "Automatico"]),
+      ...Array.from({ length: 9 }, (_, index) =>
+        makeSemanticDoc(`english-${index}.md`, 0.9 - index / 100, 0.1, ["English"])
+      ),
+      makeSemanticDoc("tail.md", 0.1, 0, ["Tail"]),
+    ]);
+
+    const searchCore = new SearchCore(mockApp as any);
+    const results = await searchCore.search({ queryText: "machine learning", resultLimit: 10 });
+
+    expect(results).toHaveLength(10);
+    expect(results.map((result) => result.documentPath)).toContain("ml-es.md");
   });
 });
