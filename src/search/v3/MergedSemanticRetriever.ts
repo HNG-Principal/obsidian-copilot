@@ -134,6 +134,11 @@ export class MergedSemanticRetriever extends BaseRetriever {
     const existingScore = this.getDocumentScore(existing);
     const newScore = this.getDocumentScore(enriched);
 
+    if (existingSource !== source) {
+      map.set(key, this.mergeDocuments(existing, enriched));
+      return;
+    }
+
     if (source === "lexical") {
       if (existingSource !== "lexical" || newScore > existingScore) {
         map.set(key, enriched);
@@ -192,10 +197,44 @@ export class MergedSemanticRetriever extends BaseRetriever {
 
     metadata.score = blendedScore;
     metadata.rerank_score = blendedScore;
+    metadata.semanticScore = source === "semantic" ? baseScore : (metadata.semanticScore ?? 0);
+    metadata.lexicalScore = source === "lexical" ? baseScore : (metadata.lexicalScore ?? 0);
 
     return new Document({
       pageContent: doc.pageContent,
       metadata,
+    });
+  }
+
+  private mergeDocuments(primary: Document, secondary: Document): Document {
+    const primaryMetadata = primary.metadata ?? {};
+    const secondaryMetadata = secondary.metadata ?? {};
+    const lexicalScore = Math.max(
+      primaryMetadata.lexicalScore ?? 0,
+      secondaryMetadata.lexicalScore ?? 0
+    );
+    const semanticScore = Math.max(
+      primaryMetadata.semanticScore ?? 0,
+      secondaryMetadata.semanticScore ?? 0
+    );
+
+    return new Document({
+      pageContent: primary.pageContent || secondary.pageContent,
+      metadata: {
+        ...secondaryMetadata,
+        ...primaryMetadata,
+        source:
+          lexicalScore > 0 && semanticScore > 0
+            ? "hybrid"
+            : (primaryMetadata.source ?? secondaryMetadata.source),
+        lexicalScore,
+        semanticScore,
+        score: Math.max(primaryMetadata.score ?? 0, secondaryMetadata.score ?? 0),
+        rerank_score: Math.max(
+          primaryMetadata.rerank_score ?? primaryMetadata.score ?? 0,
+          secondaryMetadata.rerank_score ?? secondaryMetadata.score ?? 0
+        ),
+      },
     });
   }
 

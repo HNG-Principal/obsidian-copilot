@@ -3,6 +3,7 @@ import { atom, createStore, useAtomValue } from "jotai";
 import { v4 as uuidv4 } from "uuid";
 
 import { type ChainType } from "@/chainFactory";
+import { readIndexMetadata, writeIndexMetadata } from "@/search/indexMetadata";
 import { type SortStrategy, isSortStrategy } from "@/utils/recentUsageManager";
 import {
   AGENT_MAX_ITERATIONS_LIMIT,
@@ -15,6 +16,8 @@ import {
   EmbeddingModelProviders,
   SEND_SHORTCUT,
 } from "@/constants";
+import { WebSearchProviderType } from "@/services/webContextTypes";
+import { Notice } from "obsidian";
 
 /**
  * We used to store commands in the settings file with the following interface.
@@ -122,6 +125,7 @@ export interface CopilotSettings {
   isPlusUser: boolean | undefined;
   inlineEditCommands: LegacyCommandSettings[] | undefined;
   projectList: Array<ProjectConfig>;
+  activeProjectId: string | null;
   passMarkdownImages: boolean;
   enableAutonomousAgent: boolean;
   enableCustomPromptTemplating: boolean;
@@ -141,16 +145,42 @@ export interface CopilotSettings {
   selfHostApiKey: string;
   /** Custom Miyo server URL, e.g. "http://192.168.1.10:8742" (empty = use local service discovery) */
   miyoServerUrl: string;
-  /** Which provider to use for self-host web search */
+  /** Which provider to use for web search */
+  webSearchProvider: WebSearchProviderType;
+  /** @deprecated Use webSearchProvider instead. */
   selfHostSearchProvider: "firecrawl" | "perplexity";
+  /** Base URL for a self-hosted SearXNG instance */
+  searxngUrl: string;
   /** Firecrawl API key for self-host web search */
   firecrawlApiKey: string;
   /** Perplexity API key for self-host web search via Sonar */
   perplexityApiKey: string;
+  /** TTL in hours for cached URL extraction entries */
+  urlCacheTTLHours: number;
+  /** Maximum number of URL extraction cache entries to keep on disk */
+  maxUrlCacheEntries: number;
+  /** Timeout for URL extraction requests in milliseconds */
+  urlExtractionTimeoutMs: number;
   /** Supadata API key for self-host YouTube transcripts */
   supadataApiKey: string;
+  /** Preferred language code for YouTube transcript extraction */
+  preferredTranscriptLanguage: string;
+  /** Include timestamps in formatted YouTube transcript output */
+  youtubeTranscriptTimestamps: boolean;
+  /** Folder where exported YouTube transcript notes are saved */
+  youtubeTranscriptOutputFolder: string;
+  /** TTL in hours for cached YouTube transcript entries */
+  youtubeTranscriptCacheTTLHours: number;
+  /** Remote provider used for captionless-video audio fallback */
+  audioTranscriptionProvider: "disabled" | "supadata" | "brevilabs";
   /** Enable lexical boosts (folder and graph) in search - default: true */
   enableLexicalBoosts: boolean;
+  /** Weight assigned to lexical ranking during hybrid search. */
+  hybridSearchTextWeight: number;
+  /** Enable post-fusion reranking when a reranker backend is available. */
+  enableReranking: boolean;
+  /** Maximum token budget used when generating semantic chunks. */
+  maxChunkTokens: number;
   /**
    * RAM limit for lexical search index (in MB)
    * Controls memory usage for full-text search operations
@@ -161,11 +191,16 @@ export interface CopilotSettings {
   /** Whether we have suggested built-in default commands to the user once. */
   suggestedDefaultCommands: boolean;
   autonomousAgentMaxIterations: number;
+  maxAgentTurns: number;
+  requireToolApproval: boolean;
   autonomousAgentEnabledToolIds: string[];
+  enabledTools: string[];
   /** Default reasoning effort for models that support it (GPT-5, O-series, etc.) */
   reasoningEffort: "minimal" | "low" | "medium" | "high";
   /** Default verbosity level for models that support it */
   verbosity: "low" | "medium" | "high";
+  /** Maximum number of undo snapshots to keep (5-50, default 20) */
+  maxUndoSnapshots: number;
   /** Folder where memory data is stored */
   memoryFolderName: string;
   /** Reference recent conversation history to provide more contextually relevant responses */
@@ -195,6 +230,12 @@ export interface CopilotSettings {
   defaultSystemPromptTitle: string;
   /** Token threshold for auto-compacting large context (range: 64k-1M tokens, default: 128000) */
   autoCompactThreshold: number;
+  /**
+   * Maximum file size allowed for local document conversion uploads (in MB)
+   * - Range: 1-200 MB
+   * - Default: 50 MB
+   */
+  maxFileSizeMB: number;
   /** Folder where converted document markdown files are saved */
   convertedDocOutputFolder: string;
 }
@@ -221,12 +262,86 @@ function resolveEmbeddingModelKey(settings: CopilotSettings): string {
 }
 
 /**
+ * Resolve the human-readable embedding model name for the active embedding model key.
+ */
+function resolveEmbeddingModelName(settings: CopilotSettings): string {
+  const resolvedKey = resolveEmbeddingModelKey(settings);
+  const matchingModel = (settings.activeEmbeddingModels || []).find(
+    (model) => getModelKeyFromModel(model) === resolvedKey
+  );
+
+  return matchingModel?.name ?? resolvedKey;
+}
+
+/**
+ * Mark the persisted search index stale when the embedding model changes.
+ */
+async function handleEmbeddingModelKeyChange(
+  previousSettings: CopilotSettings,
+  nextSettings: CopilotSettings
+): Promise<void> {
+  if (previousSettings.embeddingModelKey === nextSettings.embeddingModelKey) {
+    return;
+  }
+
+  if (typeof app === "undefined") {
+    return;
+  }
+
+  const metadata = await readIndexMetadata(app, nextSettings.enableIndexSync);
+  if (!metadata) {
+    return;
+  }
+
+  const nextEmbeddingModelName = resolveEmbeddingModelName(nextSettings);
+  if (metadata.embeddingModel === nextEmbeddingModelName && !metadata.stale) {
+    return;
+  }
+
+  await writeIndexMetadata(app, nextSettings.enableIndexSync, {
+    ...metadata,
+    stale: true,
+  });
+
+  new Notice("Embedding model changed. Run a full re-index to rebuild Copilot search.");
+}
+
+/**
  * Sets the settings in the atom.
  */
 export function setSettings(settings: Partial<CopilotSettings>) {
-  const newSettings = mergeAllActiveModelsWithCoreModels({ ...getSettings(), ...settings });
+  const previousSettings = getSettings();
+  const mergedSettings = { ...previousSettings, ...settings };
+
+  if (settings.webSearchProvider !== undefined && settings.selfHostSearchProvider === undefined) {
+    mergedSettings.selfHostSearchProvider =
+      settings.webSearchProvider === "searxng" ? "firecrawl" : settings.webSearchProvider;
+  }
+
+  if (settings.selfHostSearchProvider !== undefined && settings.webSearchProvider === undefined) {
+    mergedSettings.webSearchProvider = settings.selfHostSearchProvider;
+  }
+
+  if (settings.enabledTools && !settings.autonomousAgentEnabledToolIds) {
+    mergedSettings.autonomousAgentEnabledToolIds = settings.enabledTools;
+  }
+
+  if (settings.autonomousAgentEnabledToolIds && !settings.enabledTools) {
+    mergedSettings.enabledTools = settings.autonomousAgentEnabledToolIds;
+  }
+
+  if (settings.maxAgentTurns !== undefined && settings.autonomousAgentMaxIterations === undefined) {
+    mergedSettings.autonomousAgentMaxIterations = settings.maxAgentTurns;
+  }
+
+  if (settings.autonomousAgentMaxIterations !== undefined && settings.maxAgentTurns === undefined) {
+    mergedSettings.maxAgentTurns = settings.autonomousAgentMaxIterations;
+  }
+
+  const newSettings = mergeAllActiveModelsWithCoreModels(mergedSettings);
   newSettings.embeddingModelKey = resolveEmbeddingModelKey(newSettings);
   settingsStore.set(settingsAtom, newSettings);
+  void handleEmbeddingModelKeyChange(previousSettings, newSettings);
 }
 
 /**
@@ -408,6 +523,24 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.lexicalSearchRamLimit = Math.min(1000, Math.max(20, lexicalSearchRamLimit));
   }
 
+  const hybridSearchTextWeight = Number(settingsToSanitize.hybridSearchTextWeight);
+  if (isNaN(hybridSearchTextWeight)) {
+    sanitizedSettings.hybridSearchTextWeight = DEFAULT_SETTINGS.hybridSearchTextWeight;
+  } else {
+    sanitizedSettings.hybridSearchTextWeight = Math.min(1, Math.max(0, hybridSearchTextWeight));
+  }
+
+  if (typeof sanitizedSettings.enableReranking !== "boolean") {
+    sanitizedSettings.enableReranking = DEFAULT_SETTINGS.enableReranking;
+  }
+
+  const maxChunkTokens = Number(settingsToSanitize.maxChunkTokens);
+  if (isNaN(maxChunkTokens)) {
+    sanitizedSettings.maxChunkTokens = DEFAULT_SETTINGS.maxChunkTokens;
+  } else {
+    sanitizedSettings.maxChunkTokens = Math.min(2048, Math.max(128, maxChunkTokens));
+  }
+
   // Ensure autoAddActiveContentToContext has a default value (migrate from old settings)
   if (typeof sanitizedSettings.autoAddActiveContentToContext !== "boolean") {
     // Migration: check old setting first (includeActiveNoteAsContext)
@@ -436,14 +569,76 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.miyoServerUrl = DEFAULT_SETTINGS.miyoServerUrl;
   }
 
-  // Ensure selfHostSearchProvider is a valid value
-  const validSearchProviders = ["firecrawl", "perplexity"] as const;
+  // Ensure web search provider is a valid value
+  const validSearchProviders = ["firecrawl", "perplexity", "searxng"] as const;
   if (
     !validSearchProviders.includes(
-      sanitizedSettings.selfHostSearchProvider as (typeof validSearchProviders)[number]
+      (sanitizedSettings.webSearchProvider ||
+        sanitizedSettings.selfHostSearchProvider) as (typeof validSearchProviders)[number]
     )
   ) {
-    sanitizedSettings.selfHostSearchProvider = DEFAULT_SETTINGS.selfHostSearchProvider;
+    sanitizedSettings.webSearchProvider = DEFAULT_SETTINGS.webSearchProvider;
+  }
+
+  if (!sanitizedSettings.webSearchProvider) {
+    sanitizedSettings.webSearchProvider =
+      (sanitizedSettings.selfHostSearchProvider as WebSearchProviderType | undefined) ||
+      DEFAULT_SETTINGS.webSearchProvider;
+  }
+
+  sanitizedSettings.selfHostSearchProvider =
+    sanitizedSettings.webSearchProvider === "searxng"
+      ? DEFAULT_SETTINGS.selfHostSearchProvider
+      : sanitizedSettings.webSearchProvider;
+
+  if (typeof sanitizedSettings.searxngUrl !== "string") {
+    sanitizedSettings.searxngUrl = DEFAULT_SETTINGS.searxngUrl;
+  }
+
+  const urlCacheTTLHours = Number(settingsToSanitize.urlCacheTTLHours);
+  sanitizedSettings.urlCacheTTLHours = isNaN(urlCacheTTLHours)
+    ? DEFAULT_SETTINGS.urlCacheTTLHours
+    : Math.min(168, Math.max(1, urlCacheTTLHours));
+
+  const maxUrlCacheEntries = Number(settingsToSanitize.maxUrlCacheEntries);
+  sanitizedSettings.maxUrlCacheEntries = isNaN(maxUrlCacheEntries)
+    ? DEFAULT_SETTINGS.maxUrlCacheEntries
+    : Math.min(1000, Math.max(10, maxUrlCacheEntries));
+
+  const urlExtractionTimeoutMs = Number(settingsToSanitize.urlExtractionTimeoutMs);
+  sanitizedSettings.urlExtractionTimeoutMs = isNaN(urlExtractionTimeoutMs)
+    ? DEFAULT_SETTINGS.urlExtractionTimeoutMs
+    : Math.min(60000, Math.max(5000, urlExtractionTimeoutMs));
+
+  if (typeof sanitizedSettings.preferredTranscriptLanguage !== "string") {
+    sanitizedSettings.preferredTranscriptLanguage = DEFAULT_SETTINGS.preferredTranscriptLanguage;
+  } else {
+    sanitizedSettings.preferredTranscriptLanguage =
+      sanitizedSettings.preferredTranscriptLanguage.trim().toLowerCase() ||
+      DEFAULT_SETTINGS.preferredTranscriptLanguage;
+  }
+
+  if (typeof sanitizedSettings.youtubeTranscriptTimestamps !== "boolean") {
+    sanitizedSettings.youtubeTranscriptTimestamps = DEFAULT_SETTINGS.youtubeTranscriptTimestamps;
+  }
+
+  if (typeof sanitizedSettings.youtubeTranscriptOutputFolder !== "string") {
+    sanitizedSettings.youtubeTranscriptOutputFolder =
+      DEFAULT_SETTINGS.youtubeTranscriptOutputFolder;
+  }
+
+  const youtubeTranscriptCacheTTLHours = Number(settingsToSanitize.youtubeTranscriptCacheTTLHours);
+  sanitizedSettings.youtubeTranscriptCacheTTLHours = isNaN(youtubeTranscriptCacheTTLHours)
+    ? DEFAULT_SETTINGS.youtubeTranscriptCacheTTLHours
+    : Math.min(720, Math.max(1, youtubeTranscriptCacheTTLHours));
+
+  const validAudioProviders = ["disabled", "supadata", "brevilabs"] as const;
+  if (
+    !validAudioProviders.includes(
+      sanitizedSettings.audioTranscriptionProvider as (typeof validAudioProviders)[number]
+    )
+  ) {
+    sanitizedSettings.audioTranscriptionProvider = DEFAULT_SETTINGS.audioTranscriptionProvider;
   }
 
   // Ensure passMarkdownImages has a default value
@@ -473,10 +668,25 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.autonomousAgentMaxIterations = autonomousAgentMaxIterations;
   }
 
+  const maxAgentTurns = Number(settingsToSanitize.maxAgentTurns);
+  if (isNaN(maxAgentTurns) || maxAgentTurns < 1 || maxAgentTurns > 25) {
+    sanitizedSettings.maxAgentTurns = sanitizedSettings.autonomousAgentMaxIterations;
+  } else {
+    sanitizedSettings.maxAgentTurns = maxAgentTurns;
+  }
+
+  if (typeof sanitizedSettings.requireToolApproval !== "boolean") {
+    sanitizedSettings.requireToolApproval = DEFAULT_SETTINGS.requireToolApproval;
+  }
+
   // Ensure autonomousAgentEnabledToolIds is an array
   if (!Array.isArray(sanitizedSettings.autonomousAgentEnabledToolIds)) {
     sanitizedSettings.autonomousAgentEnabledToolIds =
       DEFAULT_SETTINGS.autonomousAgentEnabledToolIds;
+  }
+
+  if (!Array.isArray(sanitizedSettings.enabledTools)) {
+    sanitizedSettings.enabledTools = sanitizedSettings.autonomousAgentEnabledToolIds;
   }
 
   // Migration: rename legacy tool IDs to their new names
@@ -486,6 +696,16 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
   };
   sanitizedSettings.autonomousAgentEnabledToolIds =
     sanitizedSettings.autonomousAgentEnabledToolIds.map((id) => toolIdRenames[id] ?? id);
+  sanitizedSettings.enabledTools = sanitizedSettings.enabledTools.map(
+    (id) => toolIdRenames[id] ?? id
+  );
+
+  if (sanitizedSettings.enabledTools.length === 0) {
+    sanitizedSettings.enabledTools = sanitizedSettings.autonomousAgentEnabledToolIds;
+  }
+
+  sanitizedSettings.autonomousAgentEnabledToolIds = sanitizedSettings.enabledTools;
+  sanitizedSettings.autonomousAgentMaxIterations = sanitizedSettings.maxAgentTurns;
 
   // Ensure memoryFolderName has a default value
   if (
@@ -530,6 +750,14 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     );
   }
 
+  // Ensure maxFileSizeMB has a valid value (1-200 MB range)
+  const maxFileSizeMB = Number(settingsToSanitize.maxFileSizeMB);
+  if (isNaN(maxFileSizeMB)) {
+    sanitizedSettings.maxFileSizeMB = DEFAULT_SETTINGS.maxFileSizeMB;
+  } else {
+    sanitizedSettings.maxFileSizeMB = Math.min(200, Math.max(1, maxFileSizeMB));
+  }
+
   // Ensure quickCommandIncludeNoteContext has a default value
   if (typeof sanitizedSettings.quickCommandIncludeNoteContext !== "boolean") {
     sanitizedSettings.quickCommandIncludeNoteContext =
@@ -561,6 +789,14 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.autoAcceptEdits = DEFAULT_SETTINGS.autoAcceptEdits;
   }
 
+  // Ensure maxUndoSnapshots has a valid value (5-50 range)
+  const maxUndoSnapshots = Number(settingsToSanitize.maxUndoSnapshots);
+  if (isNaN(maxUndoSnapshots)) {
+    sanitizedSettings.maxUndoSnapshots = DEFAULT_SETTINGS.maxUndoSnapshots;
+  } else {
+    sanitizedSettings.maxUndoSnapshots = Math.min(50, Math.max(5, maxUndoSnapshots));
+  }
+
   // Ensure defaultSendShortcut has a valid value
   if (!Object.values(SEND_SHORTCUT).includes(sanitizedSettings.defaultSendShortcut)) {
     sanitizedSettings.defaultSendShortcut = DEFAULT_SETTINGS.defaultSendShortcut;
@@ -589,6 +825,13 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.projectListSortStrategy === "manual"
   ) {
     sanitizedSettings.projectListSortStrategy = DEFAULT_SETTINGS.projectListSortStrategy;
+  }
+
+  if (
+    sanitizedSettings.activeProjectId !== null &&
+    typeof sanitizedSettings.activeProjectId !== "string"
+  ) {
+    sanitizedSettings.activeProjectId = DEFAULT_SETTINGS.activeProjectId;
   }
 
   const userSystemPromptsFolder = (settingsToSanitize.userSystemPromptsFolder || "").trim();

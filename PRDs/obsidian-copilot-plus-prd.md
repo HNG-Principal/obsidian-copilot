@@ -47,7 +47,7 @@ architecture, acceptance criteria, and phasing.
 - Enable extensibility so features can be reused across other ZnoApps
   projects (e.g., DealRadar)
 
-2.2 Non-Goals
+  2.2 Non-Goals
 
 - Building a hosted SaaS offering for external users (this is internal
   tooling)
@@ -123,7 +123,7 @@ implementation will be fully self-hosted.
 - **US-F1-04:** As a user, converted documents are optionally saved as
   .md files in my vault, so they can be indexed for vault search.
 
-4.3 Technical Architecture
+  4.3 Technical Architecture
 
 **Processing Pipeline:**
 
@@ -186,7 +186,7 @@ tables.
 - Storage: Supabase Storage for temporary file holding; converted .md
   to vault folder
 
-4.4 Acceptance Criteria
+  4.4 Acceptance Criteria
 
 - PDF files up to 100 pages convert to markdown in under 30 seconds
 
@@ -225,7 +225,7 @@ and reranking. This is the "Miyo" equivalent in Copilot Plus.
 - **US-F2-04:** As a user, search results are reranked for quality so
   the top results are actually the most useful.
 
-5.3 Technical Architecture
+  5.3 Technical Architecture
 
 **Embedding Pipeline:**
 
@@ -346,7 +346,7 @@ capabilities. This is the core "@" tool palette in Copilot Plus.
 - **US-F3-03:** As a user, the agent can chain multiple tools in
   sequence (e.g., search vault then search web for gaps).
 
-6.3 Technical Architecture
+  6.3 Technical Architecture
 
 **Tool Registry:**
 
@@ -404,7 +404,7 @@ context memory store
 - Each tool is a standalone module with: schema definition, execute()
   function, and result formatter
 
-6.4 Acceptance Criteria
+  6.4 Acceptance Criteria
 
 - @ palette shows all available tools with descriptions
 
@@ -437,7 +437,7 @@ as context. Both feed structured content into the LLM context window.
 - **US-F4-03:** As a user, I can pull content from X/Twitter posts by
   URL.
 
-7.3 Technical Architecture
+  7.3 Technical Architecture
 
 **Web Search Pipeline:**
 
@@ -469,7 +469,7 @@ as context. Both feed structured content into the LLM context window.
 
 - POST /api/web/fetch --- { url } → { markdown, metadata }
 
-7.4 Acceptance Criteria
+  7.4 Acceptance Criteria
 
 - Web search returns relevant results in under 5 seconds
 
@@ -500,7 +500,7 @@ on video content without watching the full video.
 - **US-F5-03:** As a user, I can save the transcript as a note in my
   vault.
 
-8.3 Technical Architecture
+  8.3 Technical Architecture
 
 **Transcript Extraction Options:**
 
@@ -573,7 +573,7 @@ generates a targeted diff and applies it to the file.
 - **US-F6-04:** As a user, I can use Composer to generate new content
   and insert it at a specific location in a note.
 
-9.3 Technical Architecture
+  9.3 Technical Architecture
 
 **Edit Pipeline:**
 
@@ -651,7 +651,7 @@ different knowledge domains.
 - **US-F7-03:** As a user, I can switch between projects from the chat
   sidebar.
 
-10.3 Technical Architecture
+  10.3 Technical Architecture
 
 **Data Model (Supabase):**
 
@@ -689,7 +689,7 @@ created_at timestamptz Creation timestamp
 - Chat UI: project selector in sidebar header, persist last-used
   project
 
-10.4 Acceptance Criteria
+  10.4 Acceptance Criteria
 
 - Creating a project with folder scopes correctly filters vault search
   results
@@ -721,7 +721,7 @@ agent can retrieve to provide more personalized and informed responses.
 - **US-F8-03:** As a user, memories are automatically extracted from
   conversations without me having to explicitly save them.
 
-11.3 Technical Architecture
+  11.3 Technical Architecture
 
 **Memory Pipeline:**
 

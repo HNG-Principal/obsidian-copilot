@@ -1,4 +1,5 @@
 import { ProjectConfig, getCurrentProject } from "@/aiParams";
+import { ProjectFileSelectModal } from "@/components/modals/ProjectFileSelectModal";
 import { ContextManageModal } from "@/components/modals/project/context-manage-modal";
 import { TruncatedText } from "@/components/TruncatedText";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { App, Modal, Notice } from "obsidian";
 import React, { useState } from "react";
 import { createRoot, Root } from "react-dom/client";
 import { HelpTooltip } from "@/components/ui/help-tooltip";
+import { X } from "lucide-react";
 
 interface AddProjectModalContentProps {
   initialProject?: ProjectConfig;
@@ -51,6 +53,7 @@ function AddProjectModalContent({ initialProject, onSave, onCancel }: AddProject
         webUrls: "",
         youtubeUrls: "",
       },
+      pinnedFiles: [],
       created: Date.now(),
       UsageTimestamps: Date.now(),
     }
@@ -365,6 +368,58 @@ function AddProjectModalContent({ initialProject, onSave, onCancel }: AddProject
               placeholder="Enter YouTube URLs, one per line"
               className="tw-min-h-20 tw-w-full"
             />
+          </FormField>
+
+          <FormField
+            label="Pinned Files"
+            description="Always include these files in the project context, even if they are outside the folder filters."
+          >
+            <div className="tw-flex tw-flex-col tw-gap-3">
+              <div className="tw-flex tw-flex-wrap tw-gap-2">
+                {(formData.pinnedFiles || []).map((filePath) => (
+                  <div
+                    key={filePath}
+                    className="tw-flex tw-items-center tw-gap-2 tw-rounded-full tw-bg-secondary tw-px-3 tw-py-1 tw-text-xs tw-text-normal"
+                  >
+                    <span className="tw-max-w-52 tw-truncate">{filePath}</span>
+                    <button
+                      type="button"
+                      className="tw-inline-flex tw-items-center tw-justify-center tw-text-muted hover:tw-text-normal"
+                      onClick={() => {
+                        handleInputChange(
+                          "pinnedFiles",
+                          (formData.pinnedFiles || []).filter((path) => path !== filePath)
+                        );
+                      }}
+                    >
+                      <X className="tw-size-3.5" />
+                    </button>
+                  </div>
+                ))}
+                {(!formData.pinnedFiles || formData.pinnedFiles.length === 0) && (
+                  <span className="tw-text-sm tw-text-muted">No pinned files selected</span>
+                )}
+              </div>
+              <div>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    new ProjectFileSelectModal({
+                      app,
+                      excludeFilePaths: formData.pinnedFiles || [],
+                      onFileSelect: (file) => {
+                        handleInputChange("pinnedFiles", [
+                          ...(formData.pinnedFiles || []),
+                          file.path,
+                        ]);
+                      },
+                    }).open();
+                  }}
+                >
+                  Add Pinned File
+                </Button>
+              </div>
+            </div>
           </FormField>
         </div>
       </div>

@@ -1,4 +1,28 @@
 /**
+ * Wrap a tool result in XML tags for LLM consumption.
+ *
+ * @param toolId - Tool identifier.
+ * @param result - Raw tool result string.
+ * @param status - Execution status.
+ * @param maxLength - Maximum payload length preserved in the XML wrapper.
+ * @returns XML-wrapped tool result.
+ */
+export function formatToolResult(
+  toolId: string,
+  result: string,
+  status: "success" | "error",
+  maxLength: number = 8000
+): string {
+  const normalizedResult = typeof result === "string" ? result : JSON.stringify(result);
+  const trimmedResult =
+    normalizedResult.length > maxLength
+      ? `${normalizedResult.slice(0, maxLength)}\n\n[truncated ${normalizedResult.length - maxLength} characters]`
+      : normalizedResult;
+
+  return `<tool-result tool="${toolId}" status="${status}">\n${trimmedResult}\n</tool-result>`;
+}
+
+/**
  * Derive a user-facing label from a readNote tool path.
  *
  * @param rawNotePath - Original note path supplied to the readNote tool.
@@ -347,10 +371,30 @@ export class ToolResultFormatter {
       const output: string[] = ["🌐 Web Search Results"];
       const item = result[0];
 
-      // Add the main content
-      if (item.content) {
+      if (item.provider) {
+        output.push(`Provider: ${String(item.provider)}`);
+      }
+
+      if (item.query) {
+        output.push(`Query: ${String(item.query)}`);
+      }
+
+      if (item.summary) {
         output.push("");
-        output.push(item.content);
+        output.push(item.summary);
+      }
+
+      if (Array.isArray(item.results) && item.results.length > 0) {
+        output.push("");
+        item.results.forEach((entry: any, index: number) => {
+          output.push(`${index + 1}. ${entry.title || `Result ${index + 1}`}`);
+          if (entry.snippet) {
+            output.push(`   ${entry.snippet}`);
+          }
+          if (entry.url) {
+            output.push(`   Source: ${entry.url}`);
+          }
+        });
       }
 
       // Add citations if present
@@ -449,7 +493,15 @@ export class ToolResultFormatter {
 
       for (const videoResult of parsed.results) {
         if (videoResult.success) {
-          output.push(`📹 Video: ${videoResult.url}`);
+          output.push(`📹 Video: ${videoResult.title || videoResult.url}`);
+          output.push(`🔗 ${videoResult.url}`);
+          if (videoResult.provider || videoResult.extractionMethod || videoResult.cacheStatus) {
+            output.push(
+              [videoResult.provider, videoResult.extractionMethod, videoResult.cacheStatus]
+                .filter(Boolean)
+                .join(" • ")
+            );
+          }
           output.push("");
 
           // Format transcript

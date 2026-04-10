@@ -1,4 +1,5 @@
 import { logInfo, logWarn } from "@/logger";
+import type { SearchQuery, SearchResult } from "@/search/types";
 import { isSelfHostModeValid } from "@/plusUtils";
 import { shouldUseMiyo } from "@/miyo/miyoUtils";
 import { getSettings, CopilotSettings } from "@/settings/model";
@@ -7,6 +8,7 @@ import { SelfHostRetriever, VectorSearchBackend } from "./selfHostRetriever";
 import { MiyoSemanticRetriever } from "./miyo/MiyoSemanticRetriever";
 import { MergedSemanticRetriever } from "./v3/MergedSemanticRetriever";
 import { RETURN_ALL_LIMIT } from "./v3/SearchCore";
+import { SearchCore } from "./v3/SearchCore";
 import { TieredLexicalRetriever } from "./v3/TieredLexicalRetriever";
 
 /**
@@ -350,5 +352,21 @@ export class RetrieverFactory {
       ? RETURN_ALL_LIMIT
       : Math.min(normalized.maxK * 2, RETURN_ALL_LIMIT);
     return new MiyoSemanticRetriever(app, { ...normalized, maxK: semanticMax });
+  }
+
+  /**
+   * Execute an enhanced vault search using the SearchQuery contract.
+   */
+  static async search(
+    app: App,
+    query: SearchQuery,
+    settings?: Partial<CopilotSettings>
+  ): Promise<SearchResult[]> {
+    const currentSettings = settings ? { ...getSettings(), ...settings } : getSettings();
+    const searchCore = new SearchCore(app);
+    return searchCore.search({
+      ...query,
+      textWeight: query.textWeight ?? currentSettings.hybridSearchTextWeight,
+    });
   }
 }

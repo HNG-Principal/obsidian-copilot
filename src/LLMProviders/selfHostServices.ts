@@ -1,11 +1,14 @@
-import { type Youtube4llmResponse } from "@/LLMProviders/brevilabsClient";
+import { type RerankResponse, type Youtube4llmResponse } from "@/LLMProviders/brevilabsClient";
 import { getDecryptedKey } from "@/encryptionService";
-import { logError, logInfo } from "@/logger";
+import { logError, logInfo, logWarn } from "@/logger";
+import {
+  createWebSearchProvider,
+  getWebSearchProviderSettings,
+} from "@/services/webSearchProvider";
 import { getSettings } from "@/settings/model";
 
-const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
-const PERPLEXITY_CHAT_URL = "https://api.perplexity.ai/chat/completions";
 const SUPADATA_TRANSCRIPT_URL = "https://api.supadata.ai/v1/transcript";
+const SELF_HOST_RERANK_PATHS = ["/v0/rerank", "/rerank"];
 
 /** Poll interval for Supadata async jobs (ms) */
 const SUPADATA_POLL_INTERVAL = 2000;
@@ -18,10 +21,21 @@ export interface SelfHostWebSearchResult {
   citations: string[];
 }
 
-interface FirecrawlSearchResult {
-  title?: string;
-  description?: string;
-  url?: string;
+interface SelfHostRerankItem {
+  index: number;
+  relevance_score?: number;
+  score?: number;
+}
+
+interface SelfHostRerankPayload {
+  response?: RerankResponse["response"];
+  results?: SelfHostRerankItem[];
+  data?: SelfHostRerankItem[];
+  model?: string;
+  usage?: {
+    total_tokens?: number;
+  };
+  elapsed_time_ms?: number;
 }
 
 /**
@@ -29,7 +43,9 @@ interface FirecrawlSearchResult {
  */
 export function hasSelfHostSearchKey(): boolean {
   const settings = getSettings();
-  switch (settings.selfHostSearchProvider) {
+  switch (settings.webSearchProvider) {
+    case "searxng":
+      return !!settings.searxngUrl;
     case "perplexity":
       return !!settings.perplexityApiKey;
     case "firecrawl":
@@ -39,99 +55,76 @@ export function hasSelfHostSearchKey(): boolean {
 }
 
 /**
- * Web search via Firecrawl direct API (self-host mode).
- * Handles both v2 `data.web` format and older flat `data` array.
- */
-async function firecrawlSearch(query: string, apiKey: string): Promise<SelfHostWebSearchResult> {
-  const startTime = Date.now();
-
-  const response = await fetch(FIRECRAWL_SEARCH_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ query, limit: 5 }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Firecrawl search failed (${response.status}): ${text}`);
-  }
-
-  const json = await response.json();
-
-  // v2 returns { data: { web: [...] } }, older responses return { data: [...] }
-  const rawData = json?.data;
-  const results: FirecrawlSearchResult[] = Array.isArray(rawData)
-    ? rawData
-    : Array.isArray(rawData?.web)
-      ? rawData.web
-      : [];
-
-  const contentParts: string[] = [];
-  const citations: string[] = [];
-
-  for (const item of results) {
-    const title = item.title || "Untitled";
-    const description = item.description || "";
-    const url = item.url || "";
-    contentParts.push(`### ${title}\n${description}\nSource: ${url}`);
-    if (url) {
-      citations.push(url);
-    }
-  }
-
-  const elapsed = Date.now() - startTime;
-  logInfo(`[selfHostWebSearch] Firecrawl: ${results.length} results in ${elapsed}ms`);
-
-  return { content: contentParts.join("\n\n"), citations };
-}
-
-/**
- * Web search via Perplexity Sonar API (self-host mode).
- */
-async function perplexitySonarSearch(
-  query: string,
-  apiKey: string
-): Promise<SelfHostWebSearchResult> {
-  const response = await fetch(PERPLEXITY_CHAT_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "sonar",
-      messages: [{ role: "user", content: query }],
-    }),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Perplexity Sonar search failed (${response.status}): ${text}`);
-  }
-
-  const json = await response.json();
-  const content = json?.choices?.[0]?.message?.content ?? "";
-  const citations: string[] = Array.isArray(json?.citations) ? json.citations : [];
-
-  return { content, citations };
-}
-
-/**
  * Dispatch self-host web search to the provider selected in settings.
  * Returns content + citations directly without the legacy Perplexity wrapper.
  */
 export async function selfHostWebSearch(query: string): Promise<SelfHostWebSearchResult> {
+  const provider = createWebSearchProvider(getWebSearchProviderSettings());
+  const response = await provider.search(query, 5);
+  const citations = response.results.map((result) => result.url).filter(Boolean);
+  const content = response.results
+    .map(
+      (result) => `### ${result.title}\n${result.content || result.snippet}\nSource: ${result.url}`
+    )
+    .join("\n\n");
+  logInfo(`[selfHostWebSearch] ${response.provider}: ${response.results.length} results`);
+  return { content, citations };
+}
+
+/**
+ * Re-rank search results using the configured self-host backend.
+ */
+export async function selfHostRerank(query: string, documents: string[]): Promise<RerankResponse> {
   const settings = getSettings();
-  switch (settings.selfHostSearchProvider) {
-    case "perplexity":
-      return perplexitySonarSearch(query, await getDecryptedKey(settings.perplexityApiKey));
-    case "firecrawl":
-    default:
-      return firecrawlSearch(query, await getDecryptedKey(settings.firecrawlApiKey));
+  const baseUrl = settings.selfHostUrl?.trim().replace(/\/$/, "");
+  if (!baseUrl) {
+    throw new Error("Self-host rerank requires a configured self-host URL");
   }
+
+  const authorization = await resolveSelfHostAuthorizationHeader();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(authorization ? { Authorization: authorization } : {}),
+  };
+  const body = JSON.stringify({
+    query,
+    documents,
+    model: "rerank-2",
+  });
+
+  let lastError: Error | null = null;
+  for (const path of SELF_HOST_RERANK_PATHS) {
+    const endpoint = `${baseUrl}${path}`;
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body,
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        if (response.status === 404 || response.status === 405) {
+          logWarn(`[selfHostRerank] Endpoint unavailable at ${endpoint}: ${response.status}`);
+          lastError = new Error(`Self-host rerank failed (${response.status}): ${text}`);
+          continue;
+        }
+        throw new Error(`Self-host rerank failed (${response.status}): ${text}`);
+      }
+
+      const payload = (await response.json()) as SelfHostRerankPayload;
+      const normalized = normalizeSelfHostRerankPayload(payload);
+      logInfo(`[selfHostRerank] reranked ${documents.length} documents via ${endpoint}`);
+      return normalized;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (path !== SELF_HOST_RERANK_PATHS[SELF_HOST_RERANK_PATHS.length - 1]) {
+        continue;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Self-host rerank failed");
 }
 
 /**
@@ -217,4 +210,44 @@ async function pollSupadataJob(
   }
 
   throw new Error(`Supadata transcript timed out after ${SUPADATA_POLL_TIMEOUT}ms`);
+}
+
+async function resolveSelfHostAuthorizationHeader(): Promise<string | null> {
+  const settings = getSettings();
+  const rawKey = settings.selfHostApiKey || settings.plusLicenseKey;
+  if (!rawKey) {
+    return null;
+  }
+
+  const decryptedKey = await getDecryptedKey(rawKey);
+  if (!decryptedKey) {
+    return null;
+  }
+
+  return `Bearer ${decryptedKey}`;
+}
+
+function normalizeSelfHostRerankPayload(payload: SelfHostRerankPayload): RerankResponse {
+  if (payload.response?.data) {
+    return {
+      response: payload.response,
+      elapsed_time_ms: payload.elapsed_time_ms ?? 0,
+    };
+  }
+
+  const items = payload.results ?? payload.data ?? [];
+  return {
+    response: {
+      object: "list",
+      data: items.map((item) => ({
+        index: item.index,
+        relevance_score: item.relevance_score ?? item.score ?? 0,
+      })),
+      model: payload.model ?? "self-host-rerank",
+      usage: {
+        total_tokens: payload.usage?.total_tokens ?? 0,
+      },
+    },
+    elapsed_time_ms: payload.elapsed_time_ms ?? 0,
+  };
 }

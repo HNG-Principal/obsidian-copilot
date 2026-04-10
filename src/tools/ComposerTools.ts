@@ -1,4 +1,4 @@
-import { TFile } from "obsidian";
+import { TFile, App, Vault } from "obsidian";
 import { APPLY_VIEW_TYPE } from "@/components/composer/ApplyView";
 import { diffTrimmedLines } from "diff";
 import { ApplyViewResult } from "@/types";
@@ -7,6 +7,83 @@ import { createLangChainTool } from "./createLangChainTool";
 import { ensureFolderExists, sanitizeFilePath } from "@/utils";
 import { getSettings } from "@/settings/model";
 import { logWarn } from "@/logger";
+import { EditOperation, EditPlan, generateId, computeDiffs } from "@/core/editPlanner";
+import { UndoManager } from "@/core/undoManager";
+import { EditExecutor } from "@/core/editExecutor";
+
+// Module-level instances (created once, reused across tool calls)
+// Note: app and vault are accessed lazily to avoid module-load issues
+let undoManagerInstance: UndoManager | null = null;
+let editExecutorInstance: EditExecutor | null = null;
+let appInstance: App | null = null;
+let vaultInstance: Vault | null = null;
+
+function getUndoManager(): UndoManager {
+  if (!undoManagerInstance) {
+    undoManagerInstance = UndoManager.getInstance(getSettings().maxUndoSnapshots);
+  }
+  return undoManagerInstance;
+}
+
+function getEditExecutor(): EditExecutor {
+  if (!editExecutorInstance) {
+    if (!appInstance || !vaultInstance) {
+      throw new Error("EditExecutor not initialized - app and vault must be set first");
+    }
+    editExecutorInstance = new EditExecutor(getUndoManager(), vaultInstance, appInstance);
+  }
+  return editExecutorInstance;
+}
+
+// Export a function to initialize the executor with app and vault
+export function initEditExecutor(app: App, vault: Vault): void {
+  appInstance = app;
+  vaultInstance = vault;
+  // Reset instances to force re-creation with new app/vault
+  editExecutorInstance = null;
+}
+
+/**
+ * Convert a single replace operation to an EditPlan.
+ * Used by editFileTool to wrap oldText/newText into a plan.
+ */
+function createReplacePlan(filePath: string, oldText: string, newText: string): EditPlan {
+  const operation: EditOperation = {
+    kind: "replace",
+    filePath,
+    oldText,
+    newText,
+  };
+
+  return {
+    id: generateId("plan"),
+    operations: [operation],
+    description: `Replace text in ${filePath}`,
+    affectedFiles: [filePath],
+    status: "preview",
+  };
+}
+
+/**
+ * Convert a write operation to an EditPlan.
+ * Uses create for new files, replace for existing files.
+ */
+function createWritePlan(app: App, filePath: string, content: string): EditPlan {
+  const file = app.vault.getAbstractFileByPath(filePath);
+  const isExisting = file && file instanceof TFile;
+
+  const operation: EditOperation = isExisting
+    ? { kind: "replace", filePath, oldText: "", newText: content }
+    : { kind: "create", filePath, content };
+
+  return {
+    id: generateId("plan"),
+    operations: [operation],
+    description: isExisting ? `Update ${filePath}` : `Create ${filePath}`,
+    affectedFiles: [filePath],
+    status: "preview",
+  };
+}
 
 async function getFile(file_path: string): Promise<TFile> {
   let file = app.vault.getAbstractFileByPath(file_path);
@@ -164,34 +241,38 @@ const writeFileTool = createLangChainTool({
     // Convert object content to JSON string if needed
     const contentString = typeof content === "string" ? content : JSON.stringify(content, null, 2);
 
-    // Only bypass confirmation when the user has explicitly enabled auto-accept in settings.
-    // The LLM may pass confirmation=false, but that alone should not skip preview.
-    const settings = getSettings();
-    const shouldBypassConfirmation = settings.autoAcceptEdits;
+    // Create EditPlan and compute diffs
+    const plan = createWritePlan(app, path, contentString);
 
-    if (shouldBypassConfirmation) {
-      try {
-        const file = await getFile(path);
-        await app.vault.modify(file, contentString);
+    try {
+      const diffs = await computeDiffs(plan, app.vault);
+
+      // Only bypass confirmation when the user has explicitly enabled auto-accept in settings.
+      // The LLM may pass confirmation=false, but that alone should not skip preview.
+      const settings = getSettings();
+      const shouldBypassConfirmation = settings.autoAcceptEdits;
+
+      if (shouldBypassConfirmation) {
+        const result = await getEditExecutor().applyPlan(plan, plan.description);
         return {
-          result: "accepted" as ApplyViewResult,
-          message:
-            "File changes applied without preview. Do not retry or attempt alternative approaches to modify this file in response to the current user request.",
-        };
-      } catch (error: any) {
-        return {
-          result: "failed" as ApplyViewResult,
-          message: `Error writing to file without preview: ${error?.message || error}`,
+          result: result.status === "success" ? "accepted" : "failed",
+          message: `File change result: ${result.status}. Do not retry or attempt alternative approaches to modify this file in response to the current user request.`,
         };
       }
-    }
 
-    const result = await show_preview(path, contentString);
-    // Simple JSON wrapper for consistent parsing
-    return {
-      result: result,
-      message: `File change result: ${result}. Do not retry or attempt alternative approaches to modify this file in response to the current user request.`,
-    };
+      // Show preview with diffs
+      const result = await show_preview(path, diffs[0]?.newContent || contentString);
+      // Simple JSON wrapper for consistent parsing
+      return {
+        result: result,
+        message: `File change result: ${result}. Do not retry or attempt alternative approaches to modify this file in response to the current user request.`,
+      };
+    } catch (error: any) {
+      return {
+        result: "failed" as ApplyViewResult,
+        message: `Error writing to file without preview: ${error?.message || error}`,
+      };
+    }
   },
 });
 
@@ -535,43 +616,29 @@ const editFileTool = createLangChainTool({
     }
 
     try {
-      const rawContent = await app.vault.read(file);
-      const editResult = applyEditToContent(rawContent, oldText, newText);
+      // Create EditPlan and compute diffs
+      const plan = createReplacePlan(sanitizedPath, oldText, newText);
 
-      if (!editResult.ok) {
-        if (editResult.reason === "NOT_FOUND") {
-          return {
-            result: "failed" as ApplyViewResult,
-            message: `Could not find the specified text in ${sanitizedPath}. The oldText must match the file content — try including more surrounding context lines to locate the right spot.`,
-          };
-        }
+      const diffs = await computeDiffs(plan, app.vault);
+      const diff = diffs[0];
+
+      if (!diff) {
         return {
           result: "failed" as ApplyViewResult,
-          message: `Found ${editResult.occurrences} occurrences of the search text in ${sanitizedPath}. The text must be unique — add more surrounding context to make it unambiguous.`,
-        };
-      }
-
-      const modifiedContent = editResult.content;
-
-      // No-op detection: content is unchanged after replacement
-      if (rawContent === modifiedContent) {
-        return {
-          result: "accepted" as ApplyViewResult,
-          message: `No changes made to ${sanitizedPath}. The replacement produced identical content. Use writeFile if the file needs a broader rewrite.`,
+          message: `Failed to compute diff for ${sanitizedPath}.`,
         };
       }
 
       const settings = getSettings();
       if (settings.autoAcceptEdits) {
-        await app.vault.modify(file, modifiedContent);
+        const result = await getEditExecutor().applyPlan(plan, plan.description);
         return {
-          result: "accepted" as ApplyViewResult,
-          message:
-            "File changes applied without preview. Do not retry or attempt alternative approaches to modify this file in response to the current user request.",
+          result: result.status === "success" ? "accepted" : "failed",
+          message: `File change result: ${result.status}. Do not retry or attempt alternative approaches to modify this file in response to the current user request.`,
         };
       }
 
-      const result = await show_preview(sanitizedPath, modifiedContent, true);
+      const result = await show_preview(sanitizedPath, diff.newContent, true);
       return {
         result: result,
         message: `File change result: ${result}. Do not retry or attempt alternative approaches to modify this file in response to the current user request.`,

@@ -66,6 +66,16 @@ Each AI response has action buttons:
 - **Regenerate** — Ask the AI to generate a new response to the same message
 - **Delete** — Remove this response from the conversation
 
+### YouTube Transcript Flow
+
+When you open the YouTube transcript action, Copilot fetches the transcript through the shared YouTube extractor and shows a transcript view that you can:
+
+- **Copy** to the clipboard
+- **Insert at cursor** into the active note
+- **Save to Vault** as a markdown note in your configured YouTube transcript output folder
+
+Saved transcript notes include the video title, source URL, transcript body, and optional summary content when available.
+
 ---
 
 ## Chat History

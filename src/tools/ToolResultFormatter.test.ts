@@ -151,7 +151,16 @@ Just content, no path or modified date
       const result = [
         {
           type: "web_search",
-          content: "Web search content here",
+          query: "latest AI news",
+          provider: "firecrawl",
+          summary: "Web search content here",
+          results: [
+            {
+              title: "Example result",
+              url: "https://example.com",
+              snippet: "Snippet text",
+            },
+          ],
           citations: ["https://example.com", "https://example.org"],
           instruction: "Use this information to answer the question",
         },
@@ -160,7 +169,10 @@ Just content, no path or modified date
       const formatted = ToolResultFormatter.format("webSearch", JSON.stringify(result));
 
       expect(formatted).toContain("🌐 Web Search Results");
+      expect(formatted).toContain("Provider: firecrawl");
+      expect(formatted).toContain("Query: latest AI news");
       expect(formatted).toContain("Web search content here");
+      expect(formatted).toContain("1. Example result");
       expect(formatted).toContain("[1] https://example.com");
       expect(formatted).toContain("[2] https://example.org");
       expect(formatted).toContain("Note: Use this information");
@@ -184,6 +196,33 @@ Just content, no path or modified date
       // which doesn't match the XML pattern, so it falls back to parseSearchResults
       // which returns empty array for "null" string, resulting in "no results" message
       expect(formatted).toBe("📚 Found 0 relevant notes\n\nNo matching notes found.");
+    });
+  });
+
+  describe("formatYoutubeTranscription", () => {
+    it("shows YouTube transcript titles and provider metadata", () => {
+      const formatted = ToolResultFormatter.format(
+        "youtubeTranscription",
+        JSON.stringify({
+          success: true,
+          total_urls: 1,
+          results: [
+            {
+              success: true,
+              url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+              title: "Never Gonna Give You Up",
+              provider: "brevilabs",
+              extractionMethod: "captions",
+              cacheStatus: "miss",
+              transcript: "[00:00] Intro line\nSecond line",
+            },
+          ],
+        })
+      );
+
+      expect(formatted).toContain("📹 Video: Never Gonna Give You Up");
+      expect(formatted).toContain("🔗 https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+      expect(formatted).toContain("brevilabs • captions • miss");
     });
   });
 

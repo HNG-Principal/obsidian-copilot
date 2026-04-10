@@ -1,4 +1,4 @@
-import { AVAILABLE_TOOLS } from "@/components/chat-components/constants/tools";
+import { getAvailableTools } from "@/components/chat-components/constants/tools";
 import {
   ABORT_REASON,
   COMPOSER_OUTPUT_INSTRUCTIONS,
@@ -310,7 +310,7 @@ Include your extracted terms as: [SALIENT_TERMS: term1, term2, term3]`;
   private removeAtCommands(message: string): string {
     return message
       .split(" ")
-      .filter((word) => !AVAILABLE_TOOLS.includes(word.toLowerCase()))
+      .filter((word) => !getAvailableTools().includes(word.toLowerCase()))
       .join(" ")
       .trim();
   }

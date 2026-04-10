@@ -6,9 +6,9 @@ jest.mock("@/logger", () => ({
   logInfo: jest.fn(),
 }));
 
-// Mock the AVAILABLE_TOOLS constant
+// Mock the dynamic tool lookup
 jest.mock("../constants/tools", () => ({
-  AVAILABLE_TOOLS: ["@vault", "@websearch", "@composer"],
+  getAvailableTools: () => ["@vault", "@websearch", "@composer"],
 }));
 
 // Create mock global app object

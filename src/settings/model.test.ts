@@ -218,6 +218,44 @@ describe("sanitizeSettings - legacy Miyo settings cleanup", () => {
   });
 });
 
+describe("sanitizeSettings - maxFileSizeMB", () => {
+  it("uses the default when maxFileSizeMB is missing", () => {
+    const settingsWithoutMaxFileSize = {
+      ...DEFAULT_SETTINGS,
+      maxFileSizeMB: undefined as any,
+    };
+
+    const sanitized = sanitizeSettings(settingsWithoutMaxFileSize);
+
+    expect(sanitized.maxFileSizeMB).toBe(DEFAULT_SETTINGS.maxFileSizeMB);
+  });
+
+  it("clamps maxFileSizeMB to the supported range", () => {
+    const tooSmallSettings = {
+      ...DEFAULT_SETTINGS,
+      maxFileSizeMB: 0,
+    };
+    const tooLargeSettings = {
+      ...DEFAULT_SETTINGS,
+      maxFileSizeMB: 250,
+    };
+
+    expect(sanitizeSettings(tooSmallSettings).maxFileSizeMB).toBe(1);
+    expect(sanitizeSettings(tooLargeSettings).maxFileSizeMB).toBe(200);
+  });
+
+  it("preserves a valid maxFileSizeMB value", () => {
+    const settingsWithValidMaxFileSize = {
+      ...DEFAULT_SETTINGS,
+      maxFileSizeMB: 125,
+    };
+
+    const sanitized = sanitizeSettings(settingsWithValidMaxFileSize);
+
+    expect(sanitized.maxFileSizeMB).toBe(125);
+  });
+});
+
 describe("getSystemPrompt", () => {
   beforeEach(() => {
     jest.clearAllMocks();

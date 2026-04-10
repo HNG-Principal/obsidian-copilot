@@ -1,30 +1,33 @@
 import { ImageProcessor } from "@/imageProcessing/imageProcessor";
-import {
-  BrevilabsClient,
-  Twitter4llmResponse,
-  Url4llmResponse,
-} from "@/LLMProviders/brevilabsClient";
-import { selfHostYoutube4llm } from "@/LLMProviders/selfHostServices";
-import { err2String, isTwitterUrl, isYoutubeUrl } from "@/utils";
 import { logError } from "@/logger";
-import { isSelfHostModeValid } from "@/plusUtils";
-import { getSettings } from "@/settings/model";
+import { buildWebContentContextBlock, buildYouTubeContextBlock } from "@/contextProcessor";
+import { SocialMediaExtractor } from "@/services/socialMediaExtractor";
+import { formatYouTubeTimestamp } from "@/services/youtubeTranscriptFormatter";
+import { YouTubeExtractor } from "@/services/youtubeExtractor";
+import { WebExtractor } from "@/services/webExtractor";
+import type { ParsedURL } from "@/services/webContextTypes";
+import { err2String, isTwitterUrl, isYoutubeUrl } from "@/utils";
 
 export interface MentionData {
   type: string;
   original: string;
   processed?: string;
   error?: string;
+  parsedUrl?: ParsedURL;
 }
 
 export class Mention {
   private static instance: Mention;
   private mentions: Map<string, MentionData>;
-  private brevilabsClient: BrevilabsClient;
+  private webExtractor: WebExtractor;
+  private socialMediaExtractor: SocialMediaExtractor;
+  private youtubeExtractor: YouTubeExtractor;
 
   private constructor() {
     this.mentions = new Map();
-    this.brevilabsClient = BrevilabsClient.getInstance();
+    this.webExtractor = WebExtractor.getInstance();
+    this.socialMediaExtractor = SocialMediaExtractor.getInstance();
+    this.youtubeExtractor = YouTubeExtractor.getInstance();
   }
 
   static getInstance(): Mention {
@@ -49,37 +52,75 @@ export class Mention {
       .filter((url, index, self) => self.indexOf(url) === index);
   }
 
-  async processUrl(url: string): Promise<Url4llmResponse & { error?: string }> {
+  async processUrl(url: string): Promise<ParsedURL> {
     try {
-      return await this.brevilabsClient.url4llm(url);
+      return await this.webExtractor.extractUrlContent(url);
     } catch (error) {
       const msg = err2String(error);
       logError(`Error processing URL ${url}: ${msg}`);
-      return { response: url, elapsed_time_ms: 0, error: msg };
+      return {
+        url,
+        content: "",
+        status: "failed",
+        error: { code: "network_error", message: msg },
+        extractedAt: Date.now(),
+        byteLength: 0,
+      };
     }
   }
 
-  async processYoutubeUrl(url: string): Promise<{ transcript: string; error?: string }> {
+  async processYoutubeUrl(url: string): Promise<{ context: string; error?: string }> {
     try {
-      const response =
-        isSelfHostModeValid() && getSettings().supadataApiKey
-          ? await selfHostYoutube4llm(url)
-          : await this.brevilabsClient.youtube4llm(url);
-      return { transcript: response.response.transcript };
+      const response = await this.youtubeExtractor.extractTranscript(url);
+      return {
+        context: buildYouTubeContextBlock({
+          title: response.video.title,
+          url: response.video.url,
+          videoId: response.video.videoId,
+          channel: response.video.channelName,
+          description: response.video.description,
+          uploadDate: response.video.publicationDate,
+          duration:
+            response.video.durationSeconds != null
+              ? formatYouTubeTimestamp(response.video.durationSeconds)
+              : undefined,
+          transcript: response.transcript.formattedMarkdown || response.transcript.plainText,
+        }),
+      };
     } catch (error) {
       const msg = err2String(error);
       logError(`Error processing YouTube URL ${url}: ${msg}`);
-      return { transcript: "", error: msg };
+      return {
+        context: buildYouTubeContextBlock({
+          title: "YouTube video",
+          url,
+          videoId: "unknown",
+          error: msg,
+        }),
+        error: msg,
+      };
     }
   }
 
-  async processTwitterUrl(url: string): Promise<Twitter4llmResponse & { error?: string }> {
+  async processTwitterUrl(url: string): Promise<ParsedURL> {
     try {
-      return await this.brevilabsClient.twitter4llm(url);
+      const parsed = await this.socialMediaExtractor.extractSocialPost(url);
+      if (!parsed) {
+        return await this.webExtractor.extractUrlContent(url);
+      }
+
+      return parsed;
     } catch (error) {
       const msg = err2String(error);
       logError(`Error processing Twitter URL ${url}: ${msg}`);
-      return { response: url, elapsed_time_ms: 0, error: msg };
+      return {
+        url,
+        content: "",
+        status: "failed",
+        error: { code: "network_error", message: msg },
+        extractedAt: Date.now(),
+        byteLength: 0,
+      };
     }
   }
 
@@ -120,7 +161,7 @@ export class Mention {
           this.mentions.set(url, {
             type: "youtube",
             original: url,
-            processed: processed.transcript,
+            processed: processed.context,
             error: processed.error,
           });
         }
@@ -135,8 +176,15 @@ export class Mention {
           this.mentions.set(url, {
             type: "twitter",
             original: url,
-            processed: processed.response,
-            error: processed.error,
+            processed: [
+              processed.author ? `Author: ${processed.author}` : null,
+              processed.publicationDate ? `Date: ${processed.publicationDate}` : null,
+              processed.content,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            error: processed.error?.message,
+            parsedUrl: processed,
           });
         }
         return { type: "twitter", data: this.mentions.get(url) };
@@ -149,8 +197,9 @@ export class Mention {
         this.mentions.set(url, {
           type: "url",
           original: url,
-          processed: processed.response,
-          error: processed.error,
+          processed: buildWebContentContextBlock(processed),
+          error: processed.error?.message,
+          parsedUrl: processed,
         });
       }
       return { type: "url", data: this.mentions.get(url) };
@@ -170,16 +219,18 @@ export class Mention {
 
       if (urlData.processed) {
         if (result.type === "youtube") {
-          urlContext += `\n\n<youtube_video_context>\n<url>${urlData.original}</url>\n<content>\n${urlData.processed}\n</content>\n</youtube_video_context>`;
+          urlContext += urlData.processed;
         } else if (result.type === "twitter") {
           urlContext += `\n\n<twitter_content>\n<url>${urlData.original}</url>\n<content>\n${urlData.processed}\n</content>\n</twitter_content>`;
         } else {
-          urlContext += `\n\n<url_content>\n<url>${urlData.original}</url>\n<content>\n${urlData.processed}\n</content>\n</url_content>`;
+          urlContext += urlData.processed;
         }
       }
 
       if (urlData.error) {
         processedErrorUrls[urlData.original] = urlData.error;
+      } else if (urlData.parsedUrl?.status === "partial" && urlData.parsedUrl.error) {
+        processedErrorUrls[urlData.original] = urlData.parsedUrl.error.message;
       }
     });
 

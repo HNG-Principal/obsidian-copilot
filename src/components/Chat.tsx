@@ -4,7 +4,6 @@ import {
   getSelectedTextContexts,
   ProjectConfig,
   removeSelectedTextContext,
-  setCurrentProject,
   useChainType,
   updateIndexingProgressState,
   useIndexingProgress,
@@ -42,12 +41,14 @@ import { clearRecordedPromptPayload } from "@/LLMProviders/chainRunner/utils/pro
 import { logFileManager } from "@/logFileManager";
 import CopilotPlugin from "@/main";
 import { useIsPlusUser } from "@/plusUtils";
-import { updateSetting, useSettingsValue } from "@/settings/model";
+import { useSettingsValue } from "@/settings/model";
 import { ChatUIState } from "@/state/ChatUIState";
 import { FileParserManager } from "@/tools/FileParserManager";
+import { getConversionErrorChatMessage } from "@/tools/parsers/conversionErrorMessages";
 import { ChatMessage } from "@/types/message";
-import { err2String, isPlusChain } from "@/utils";
+import { err2String, formatDateTime, isPlusChain } from "@/utils";
 import { arrayBufferToBase64 } from "@/utils/base64";
+import { formatErrorChunk } from "@/utils/toolResultUtils";
 import { Notice, TFile } from "obsidian";
 import { ContextManageModal } from "@/components/modals/project/context-manage-modal";
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
@@ -369,6 +370,18 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
       }
     } catch (error) {
       logError("Error sending message:", error);
+      const conversionErrorMessage = getConversionErrorChatMessage(error);
+      if (conversionErrorMessage) {
+        addMessage({
+          id: uuidv4(),
+          sender: AI_SENDER,
+          isErrorMessage: true,
+          message: formatErrorChunk(conversionErrorMessage),
+          isVisible: true,
+          timestamp: formatDateTime(new Date()),
+        });
+        return;
+      }
       new Notice("Failed to send message. Please try again.");
     } finally {
       safeSet.setLoading(false);
@@ -557,71 +570,53 @@ const ChatInternal: React.FC<ChatProps & { chatInput: ReturnType<typeof useChatI
   }, [onSaveChat, handleSaveAsNote]);
 
   const handleAddProject = useCallback(
-    (project: ProjectConfig) => {
-      const currentProjects = settings.projectList || [];
-      const existingIndex = currentProjects.findIndex((p) => p.name === project.name);
-
-      if (existingIndex >= 0) {
-        throw new Error(`Project "${project.name}" already exists, please use a different name`);
-      }
-
-      const newProjectList = [...currentProjects, project];
-      updateSetting("projectList", newProjectList);
+    async (project: ProjectConfig) => {
+      const createdProject = await plugin.projectManager.createProject(project);
 
       // Check if this project is now the current project
       const currentProject = getCurrentProject();
-      if (currentProject?.id === project.id) {
+      if (currentProject?.id === createdProject.id) {
         // Reload the project context for the newly added project
         reloadCurrentProject()
           .then(() => {
-            new Notice(`${project.name} added and context loaded`);
+            new Notice(`${createdProject.name} added and context loaded`);
           })
           .catch((error: Error) => {
             logError("Error loading project context:", error);
-            new Notice(`${project.name} added but context loading failed`);
+            new Notice(`${createdProject.name} added but context loading failed`);
           });
       } else {
-        new Notice(`${project.name} added successfully`);
+        new Notice(`${createdProject.name} added successfully`);
       }
 
       return true;
     },
-    [settings.projectList]
+    [plugin.projectManager]
   );
 
   const handleEditProject = useCallback(
-    (originP: ProjectConfig, updateP: ProjectConfig) => {
-      const currentProjects = settings.projectList || [];
-      const existingProject = currentProjects.find((p) => p.name === originP.name);
-
-      if (!existingProject) {
-        throw new Error(`Project "${originP.name}" does not exist`);
-      }
-
-      const newProjectList = currentProjects.map((p) => (p.name === originP.name ? updateP : p));
-      updateSetting("projectList", newProjectList);
+    async (originP: ProjectConfig, updateP: ProjectConfig) => {
+      const updatedProject = await plugin.projectManager.updateProject(originP.id, updateP);
 
       // If this is the current project, update the current project atom
       const currentProject = getCurrentProject();
       if (currentProject?.id === originP.id) {
-        setCurrentProject(updateP);
-
         // Reload the project context
         reloadCurrentProject()
           .then(() => {
-            new Notice(`${originP.name} updated and context reloaded`);
+            new Notice(`${updatedProject.name} updated and context reloaded`);
           })
           .catch((error: Error) => {
             logError("Error reloading project context:", error);
-            new Notice(`${originP.name} updated but context reload failed`);
+            new Notice(`${updatedProject.name} updated but context reload failed`);
           });
       } else {
-        new Notice(`${originP.name} updated successfully`);
+        new Notice(`${updatedProject.name} updated successfully`);
       }
 
       return true;
     },
-    [settings.projectList]
+    [plugin.projectManager]
   );
 
   const handleRemoveSelectedText = useCallback(

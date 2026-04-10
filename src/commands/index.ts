@@ -557,9 +557,8 @@ export function registerCommands(
       return;
     }
 
-    const { getWebViewerService } = await import(
-      "@/services/webViewerService/webViewerServiceSingleton"
-    );
+    const { getWebViewerService } =
+      await import("@/services/webViewerService/webViewerServiceSingleton");
 
     try {
       const service = getWebViewerService(plugin.app);
@@ -663,5 +662,29 @@ export function registerCommands(
     // Show the Quick Ask panel (pass activeView for leaf binding)
     plugin.quickAskController.show(activeView, view);
     return true;
+  });
+
+  // Undo last Copilot edit
+  addCommand(plugin, COMMAND_IDS.UNDO_COPILOT_EDIT, async () => {
+    try {
+      const { UndoManager } = await import("@/core/undoManager");
+      const { EditExecutor } = await import("@/core/editExecutor");
+
+      const undoManager = UndoManager.getInstance();
+      // EditExecutor is instantiated but not used directly in this command
+      // It's used internally by UndoManager for rollback operations
+      void new EditExecutor(undoManager, plugin.app.vault, plugin.app);
+
+      const undone = await undoManager.undo(plugin.app.vault, plugin.app);
+
+      if (undone) {
+        new Notice(`Undo successful: ${undone.description}`);
+      } else {
+        new Notice("Nothing to undo");
+      }
+    } catch (error) {
+      logError("Error undoing:", error);
+      new Notice(`Undo failed: ${error.message}`);
+    }
   });
 }

@@ -79,6 +79,8 @@ export class ContextCompactor {
     "note_context",
     "active_note",
     "url_content",
+    "web-content",
+    "web-search",
     "selected_text",
     "embedded_note",
     "embedded_pdf",
@@ -312,6 +314,7 @@ Summary:`;
   /** Block types that use <url> instead of <path> */
   private readonly URL_BASED_TYPES = [
     "url_content",
+    "web-content",
     "web_tab_context",
     "active_web_tab",
     "youtube_video_context",

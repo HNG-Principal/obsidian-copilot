@@ -1,19 +1,20 @@
-import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { logError } from "@/logger";
-import { formatYoutubeUrl, insertIntoEditor, validateYoutubeUrl } from "@/utils";
+import type { YouTubeExtractionResult } from "@/services/youtubeContextTypes";
+import { YouTubeExtractor } from "@/services/youtubeExtractor";
+import { YouTubeTranscriptNoteWriter } from "@/services/youtubeTranscriptNoteWriter";
+import { getSettings } from "@/settings/model";
+import { insertIntoEditor, validateYoutubeUrl } from "@/utils";
 import { App, Modal, Notice } from "obsidian";
 import * as React from "react";
 import { createRoot, Root } from "react-dom/client";
 
 interface TranscriptData {
-  videoId: string;
-  transcript: string;
-  url: string;
+  extraction: YouTubeExtractionResult;
 }
 
-function YoutubeTranscriptModalContent({ onClose }: { onClose: () => void }) {
+export function YoutubeTranscriptModalContent({ onClose }: { onClose: () => void }) {
   const [currentView, setCurrentView] = React.useState<"input" | "display">("input");
   const [url, setUrl] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(false);
@@ -61,19 +62,9 @@ function YoutubeTranscriptModalContent({ onClose }: { onClose: () => void }) {
     setError("");
 
     try {
-      const response = await BrevilabsClient.getInstance().youtube4llm(url);
-
-      if (!response.response.transcript) {
-        throw new Error(
-          "Transcript not available. Only English videos with auto transcript enabled are supported."
-        );
-      }
-
-      // Store transcript data
+      const extraction = await YouTubeExtractor.getInstance().extractTranscript(url);
       const newTranscriptData: TranscriptData = {
-        videoId: validation.videoId!,
-        transcript: response.response.transcript,
-        url: formatYoutubeUrl(validation.videoId!),
+        extraction,
       };
 
       setTranscriptData(newTranscriptData);
@@ -94,7 +85,7 @@ function YoutubeTranscriptModalContent({ onClose }: { onClose: () => void }) {
     if (!transcriptData) return;
 
     try {
-      const textToCopy = `# YouTube Video Transcript\n\nSource: ${transcriptData.url}\n\n${transcriptData.transcript}`;
+      const textToCopy = buildTranscriptText(transcriptData);
       await navigator.clipboard.writeText(textToCopy);
       new Notice("Transcript copied to clipboard!");
     } catch (error) {
@@ -107,12 +98,31 @@ function YoutubeTranscriptModalContent({ onClose }: { onClose: () => void }) {
     if (!transcriptData) return;
 
     try {
-      const textToInsert = `# YouTube Video Transcript\n\nSource: ${transcriptData.url}\n\n${transcriptData.transcript}`;
+      const textToInsert = buildTranscriptText(transcriptData);
       await insertIntoEditor(textToInsert, false);
       onClose();
     } catch (error) {
       logError("Failed to insert to note:", error);
       new Notice("Failed to insert to note");
+    }
+  };
+
+  const handleSaveToVault = async () => {
+    if (!transcriptData) return;
+
+    try {
+      const saved = await YouTubeTranscriptNoteWriter.getInstance().save(
+        transcriptData.extraction.video,
+        transcriptData.extraction.transcript,
+        {
+          outputFolder: getSettings().youtubeTranscriptOutputFolder,
+        }
+      );
+      new Notice(`Transcript saved to ${saved.path}`);
+      onClose();
+    } catch (error) {
+      logError("Failed to save transcript to vault:", error);
+      new Notice("Failed to save transcript to vault");
     }
   };
 
@@ -130,24 +140,33 @@ function YoutubeTranscriptModalContent({ onClose }: { onClose: () => void }) {
   };
 
   if (currentView === "display" && transcriptData) {
+    const { extraction } = transcriptData;
     return (
       <div className="tw-flex tw-flex-col tw-gap-4">
         {/* Video info section */}
         <div className="tw-rounded tw-bg-secondary tw-p-3">
+          <div className="tw-mb-1 tw-text-sm tw-font-semibold">{extraction.video.title}</div>
+          {extraction.video.channelName && (
+            <div className="tw-mb-1 tw-text-xs tw-text-muted">{extraction.video.channelName}</div>
+          )}
           <a
-            href={transcriptData.url}
+            href={extraction.video.url}
             className="tw-text-sm tw-text-muted hover:tw-text-normal"
             target="_blank"
             rel="noopener noreferrer"
           >
-            {transcriptData.url}
+            {extraction.video.url}
           </a>
+          <div className="tw-mt-2 tw-text-xs tw-text-muted">
+            {extraction.transcript.provider} • {extraction.transcript.extractionMethod} •{" "}
+            {extraction.cacheStatus}
+          </div>
         </div>
 
         {/* Transcript content */}
         <div className="tw-max-h-96 tw-overflow-y-auto tw-rounded tw-border tw-border-border tw-bg-primary tw-p-4">
           <div className="tw-whitespace-pre-wrap tw-text-sm tw-leading-relaxed">
-            {transcriptData.transcript}
+            {extraction.transcript.formattedMarkdown || extraction.transcript.plainText}
           </div>
         </div>
 
@@ -161,6 +180,9 @@ function YoutubeTranscriptModalContent({ onClose }: { onClose: () => void }) {
           </Button>
           <Button variant="default" onClick={handleInsertToNote}>
             Insert at Cursor
+          </Button>
+          <Button variant="default" onClick={handleSaveToVault}>
+            Save to Vault
           </Button>
           <Button variant="secondary" onClick={onClose}>
             Close
@@ -222,4 +244,24 @@ export class YoutubeTranscriptModal extends Modal {
   onClose() {
     this.root.unmount();
   }
+}
+
+/**
+ * Build clipboard/editor text for a processed transcript.
+ *
+ * @param transcriptData - Processed transcript payload.
+ * @returns Markdown text for copy/insert actions.
+ */
+export function buildTranscriptText(transcriptData: TranscriptData): string {
+  const { extraction } = transcriptData;
+  const sections = [
+    `# ${extraction.video.title}`,
+    "",
+    `Source: ${extraction.video.url}`,
+    ...(extraction.video.channelName ? [`Channel: ${extraction.video.channelName}`] : []),
+    "",
+    extraction.transcript.formattedMarkdown || extraction.transcript.plainText,
+  ];
+
+  return sections.join("\n");
 }

@@ -19,7 +19,7 @@ import { $createFolderPillNode } from "../pills/FolderPillNode";
 import { $createWebTabPillNode } from "../pills/WebTabPillNode";
 import { $createActiveWebTabPillNode } from "../pills/ActiveWebTabPillNode";
 import { logInfo } from "@/logger";
-import { AVAILABLE_TOOLS } from "../constants/tools";
+import { getAvailableTools } from "../constants/tools";
 
 declare const app: App;
 
@@ -245,7 +245,7 @@ function resolveToolReference(toolName: string): string | null {
   // Ensure the tool name has @ prefix
   const normalizedToolName = toolName.startsWith("@") ? toolName : `@${toolName}`;
 
-  if (AVAILABLE_TOOLS.includes(normalizedToolName)) {
+  if (getAvailableTools().includes(normalizedToolName)) {
     return normalizedToolName;
   }
 

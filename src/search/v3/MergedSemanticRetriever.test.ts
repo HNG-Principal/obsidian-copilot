@@ -75,8 +75,10 @@ describe("MergedSemanticRetriever", () => {
     const results = await retriever.getRelevantDocuments("query");
 
     expect(results).toHaveLength(1);
-    expect(results[0].metadata.source).toBe("lexical");
+    expect(results[0].metadata.source).toBe("hybrid");
     expect(results[0].metadata.chunkId).toBe("note.md#0");
+    expect(results[0].metadata.lexicalScore).toBeCloseTo(0.8, 2);
+    expect(results[0].metadata.semanticScore).toBeCloseTo(0.9, 2);
   });
 
   it("retains unique semantic results with blended scoring", async () => {
