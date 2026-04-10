@@ -1,7 +1,7 @@
 # Contracts: Long-Term Memory
 
 **Feature**: 009-long-term-memory  
-**Date**: 2026-04-08
+**Date**: 2026-04-09 (updated from 2026-04-08)
 
 This document defines the public interfaces exposed by the Long-Term Memory module. These are the contracts other modules depend on — changes require coordinating with consumers.
 
@@ -69,21 +69,20 @@ Internal storage contract. Isolates persistence logic from business logic for te
 
 ```typescript
 interface IMemoryStore {
-  /** Load all memories from disk. */
-  load(): Promise<MemoryStoreData>;
+  /** Load all non-deleted memories from memories.jsonl. */
+  loadMemories(): Promise<Memory[]>;
 
-  /** Persist the full store to disk (atomic write). */
-  save(data: MemoryStoreData): Promise<void>;
+  /** Load all embeddings from embeddings.jsonl (header + vectors). */
+  loadEmbeddings(): Promise<{ model: string; dimension: number; vectors: Map<string, number[]> }>;
 
-  /** Check if the store file exists. */
+  /** Append a memory record + embedding to their respective JSONL files. */
+  appendMemory(memory: Memory, embedding: number[]): Promise<void>;
+
+  /** Rewrite full JSONL files (used for compaction, bulk updates). */
+  save(memories: Memory[], embeddings: Map<string, number[]>, model: string): Promise<void>;
+
+  /** Check if the store directory and files exist. */
   exists(): Promise<boolean>;
-}
-
-interface MemoryStoreData {
-  version: number;
-  embeddingModel: string;
-  memories: Memory[];
-  lastUpdated: number;
 }
 ```
 
@@ -110,20 +109,23 @@ type ParseExtractionResponse = (llmResponse: string) => Array<{
 }>;
 
 /**
- * Deduplicate and merge memories based on LLM extraction decisions.
+ * Deduplicate memories using two-stage approach:
+ * 1. Cosine similarity check against existing embeddings
+ * 2. LLM-assisted merge for candidates above threshold
  */
 type DeduplicateMemories = (
   existing: Memory[],
+  existingEmbeddings: Map<string, number[]>,
   extracted: Array<{
     content: string;
     category: MemoryCategory;
-    isUpdate: boolean;
-    updatedMemoryId: string | null;
-  }>
-) => {
-  toInsert: Memory[];
-  toUpdate: Array<{ id: string; content: string; category: MemoryCategory }>;
-};
+    embedding: number[];
+  }>,
+  threshold: number // default 0.85
+) => Promise<{
+  toInsert: Array<{ content: string; category: MemoryCategory; embedding: number[] }>;
+  toUpdate: Array<{ id: string; content: string; category: MemoryCategory; embedding: number[] }>;
+}>;
 
 /**
  * Filter sensitive content from text before extraction.
@@ -142,8 +144,9 @@ New settings added to `CopilotSettings`:
 // Added to CopilotSettings interface
 {
   enableLongTermMemory: boolean; // default: true
-  maxLongTermMemories: number; // default: 100, range: 10-500
-  longTermMemoryRetrievalCount: number; // default: 10, range: 1-20
+  maxLongTermMemories: number; // default: 5000, range: 100-10000
+  maxMemoriesRetrieved: number; // default: 10, range: 1-50
+  memoryDeduplicationThreshold: number; // default: 0.85, range: 0.5-1.0
 }
 ```
 
@@ -169,8 +172,8 @@ Injection order (prepended before system prompt):
 
 ## Event Hooks
 
-| Hook Point               | Trigger                                                     | Consumer                                             |
-| ------------------------ | ----------------------------------------------------------- | ---------------------------------------------------- |
-| Post-response extraction | `BaseChainRunner.handleResponse()` completes                | `ILongTermMemoryManager.extractAndStore()`           |
-| Pre-request retrieval    | System prompt construction in `getSystemPromptWithMemory()` | `ILongTermMemoryManager.getRelevantMemoriesPrompt()` |
-| Settings change          | `subscribeToSettingsChange()` for `enableLongTermMemory`    | Feature toggle, re-embed trigger                     |
+| Hook Point               | Trigger                                                          | Consumer                                             |
+| ------------------------ | ---------------------------------------------------------------- | ---------------------------------------------------- |
+| Post-response extraction | `BaseChainRunner.handleResponse()` completes                     | `ILongTermMemoryManager.extractAndStore()`           |
+| Pre-request retrieval    | `UserMemoryManager.getUserMemoryPrompt()` builds memory sections | `ILongTermMemoryManager.getRelevantMemoriesPrompt()` |
+| Settings change          | `subscribeToSettingsChange()` for `enableLongTermMemory`         | Feature toggle, re-embed trigger                     |

@@ -9,6 +9,7 @@ import { useIsSelfHostEligible, validateSelfHostMode } from "@/plusUtils";
 import { updateSetting, useSettingsValue } from "@/settings/model";
 import { Notice } from "obsidian";
 import React, { useState } from "react";
+import { MemorySettings } from "./MemorySettings";
 import { ToolSettingsSection } from "./ToolSettingsSection";
 
 export const CopilotPlusSettings: React.FC = () => {
@@ -236,6 +237,8 @@ export const CopilotPlusSettings: React.FC = () => {
               updateSetting("enableSavedMemory", checked);
             }}
           />
+
+          <MemorySettings />
 
           {isSelfHostEligible && (
             <>

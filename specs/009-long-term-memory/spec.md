@@ -15,6 +15,14 @@
 - Q: What should the default max number of memories retrieved per AI turn be? → A: 10 memories max (configurable in settings).
 - Q: Should memories be stored as human-readable markdown or structured data? → A: Structured data file with optional markdown export for inspection.
 
+### Session 2026-04-09
+
+- Q: What structured data format should the memory store use? → A: JSONL file — append-friendly and consistent with existing `.copilot/` index file patterns.
+- Q: Should there be a maximum memory store size, and what happens when it's exceeded? → A: 5000 memories max per vault. When exceeded, oldest and lowest-relevance memories are pruned automatically.
+- Q: Can users disable automatic memory extraction entirely? → A: Yes — a toggle in settings (enabled by default). When disabled, no extraction occurs but existing memories remain retrievable.
+- Q: What mechanism should deduplication use to detect similar memories? → A: Embedding cosine similarity with a configurable threshold — memories above the threshold are candidates for merging.
+- Q: Should memory embeddings reuse the vault search embedding provider or use a separate one? → A: Reuse the same embedding provider configured for vault search (EmbeddingManager).
+
 ## User Scenarios & Testing _(mandatory)_
 
 ### User Story 1 - Automatic Fact Extraction from Conversations (Priority: P1)
@@ -96,19 +104,22 @@ A user repeatedly discusses the same topic across multiple conversations. The sy
 ### Functional Requirements
 
 - **FR-001**: System MUST automatically extract factual information from chat conversations at the end of each AI response turn, without requiring explicit user action.
-- **FR-002**: System MUST store extracted memories persistently in a structured data format across sessions (surviving Obsidian restarts), with optional markdown export for user inspection.
+- **FR-002**: System MUST store extracted memories persistently in JSONL format (one JSON object per line) within `.copilot/memory/` across sessions (surviving Obsidian restarts), with optional markdown export for user inspection.
 - **FR-003**: System MUST retrieve semantically relevant memories based on the current conversation context and inject them into the AI's system prompt or context.
-- **FR-004**: System MUST deduplicate memories — overlapping or redundant facts are merged rather than stored separately.
+- **FR-004**: System MUST deduplicate memories using embedding cosine similarity with a configurable threshold — overlapping or redundant facts above the threshold are merged rather than stored separately.
 - **FR-005**: System MUST provide a management interface where users can view all stored memories.
 - **FR-006**: System MUST allow users to edit the content of any stored memory.
 - **FR-007**: System MUST allow users to delete any stored memory permanently.
 - **FR-008**: System MUST update existing memories when contradictory or updated information is provided by the user.
 - **FR-009**: System MUST limit the number of retrieved memories injected into context to a configurable maximum (default: 10) to avoid exceeding the model's context window.
 - **FR-010**: System MUST skip extraction of content matching known sensitive patterns (API keys, tokens, passwords) and MUST allow users to flag individual memories as "sensitive" to exclude them from retrieval.
+- **FR-011**: System MUST enforce a configurable maximum memory store size (default: 5000). When exceeded, the system MUST automatically prune the oldest and lowest-relevance memories.
+- **FR-012**: System MUST provide a settings toggle to enable/disable automatic memory extraction (enabled by default). When disabled, existing memories remain retrievable but no new extraction occurs.
+- **FR-013**: System MUST reuse the vault search embedding provider (EmbeddingManager) for memory embeddings — no separate embedding configuration required.
 
 ### Key Entities
 
-- **Memory**: A stored piece of factual knowledge. Key attributes: content (text), source conversation reference, source project tag (optional), creation date, last updated date, topic/category (auto-assigned).
+- **Memory**: A stored piece of factual knowledge. Key attributes: content (text), embedding vector, source conversation reference, source project tag (optional), creation date, last updated date, topic/category (auto-assigned), sensitive flag (boolean, default false).
 - **MemoryRetrievalResult**: A ranked memory match. Key attributes: memory reference, relevance score, source context.
 
 ## Success Criteria _(mandatory)_
@@ -123,10 +134,13 @@ A user repeatedly discusses the same topic across multiple conversations. The sy
 
 ## Assumptions
 
-- Memories are stored locally within the Obsidian vault as a structured data file (not plain markdown notes), with an optional markdown export feature for user inspection.
+- Memories are stored locally within the Obsidian vault as JSONL files in `.copilot/memory/` (not plain markdown notes), with an optional markdown export feature for user inspection.
 - Memory extraction uses the same LLM configured for chat — no separate model is required.
 - The memory store is per-vault. Different vaults have independent memory stores.
 - Memories are global across projects but tagged with their source project. Retrieval can optionally filter by the active project while still allowing cross-project recall.
-- Memory retrieval uses semantic similarity (not keyword matching) for relevance ranking.
+- Memory retrieval uses semantic similarity via the existing EmbeddingManager (not keyword matching) for relevance ranking. No separate embedding provider configuration is needed.
 - There is a configurable maximum number of memories that can be injected into context (default: 10, adjustable in settings).
 - The system does not automatically extract memories from existing vault notes — only from chat conversations.
+- Automatic memory extraction is togglable in settings (enabled by default). Disabling it stops new extraction but preserves existing memories for retrieval.
+- The memory store has a configurable maximum size of 5000 memories per vault. When exceeded, the oldest and lowest-relevance memories are pruned automatically.
+- Deduplication uses embedding cosine similarity with a configurable threshold to detect semantically overlapping memories.

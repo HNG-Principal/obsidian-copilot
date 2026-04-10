@@ -802,6 +802,7 @@ export const COMMAND_IDS = {
   DOWNLOAD_YOUTUBE_SCRIPT: "download-youtube-script",
   TRIGGER_QUICK_ASK: "trigger-quick-ask",
   UNDO_COPILOT_EDIT: "undo-copilot-edit",
+  MANAGE_LONG_TERM_MEMORIES: "manage-long-term-memories",
 } as const;
 
 export const COMMAND_NAMES: Record<CommandId, string> = {
@@ -832,6 +833,7 @@ export const COMMAND_NAMES: Record<CommandId, string> = {
   [COMMAND_IDS.DOWNLOAD_YOUTUBE_SCRIPT]: "Download YouTube Script (plus)",
   [COMMAND_IDS.TRIGGER_QUICK_ASK]: "Quick Ask",
   [COMMAND_IDS.UNDO_COPILOT_EDIT]: "Undo last Copilot edit",
+  [COMMAND_IDS.MANAGE_LONG_TERM_MEMORIES]: "Manage long-term memories",
 };
 
 export type CommandId = (typeof COMMAND_IDS)[keyof typeof COMMAND_IDS];
@@ -853,6 +855,7 @@ export const COMMAND_ICONS: Partial<Record<CommandId, string>> = {
   [COMMAND_IDS.APPLY_CUSTOM_COMMAND]: "play-circle",
   [COMMAND_IDS.INDEX_VAULT_TO_COPILOT_INDEX]: "refresh-cw",
   [COMMAND_IDS.FORCE_REINDEX_VAULT_TO_COPILOT_INDEX]: "rotate-cw",
+  [COMMAND_IDS.MANAGE_LONG_TERM_MEMORIES]: "brain",
   [COMMAND_IDS.CLEAR_LOCAL_COPILOT_INDEX]: "trash-2",
   [COMMAND_IDS.CLEAR_COPILOT_CACHE]: "eraser",
   [COMMAND_IDS.GARBAGE_COLLECT_COPILOT_INDEX]: "filter-x",
@@ -1033,6 +1036,10 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   autoCompactThreshold: 128000,
   maxFileSizeMB: 50,
   convertedDocOutputFolder: DEFAULT_CONVERTED_DOC_OUTPUT_FOLDER,
+  enableLongTermMemory: true,
+  maxLongTermMemories: 5000,
+  maxMemoriesRetrieved: 10,
+  memoryDeduplicationThreshold: 0.85,
 };
 
 export const EVENT_NAMES = {

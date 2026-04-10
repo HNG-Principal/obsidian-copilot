@@ -17,6 +17,7 @@ Welcome to the official documentation for **Copilot for Obsidian**, an AI-powere
 | [Projects](projects.md)                                     | Focused workspaces with isolated context, model, and chat history               |
 | [System Prompts](system-prompts.md)                         | Customizing AI behavior with built-in and custom system prompts                 |
 | [Copilot Plus and Self-Host](copilot-plus-and-self-host.md) | Copilot Plus features, document conversion, memory system, self-host mode, Miyo |
+| [Long-Term Memory](long-term-memory.md)                     | Automatic fact extraction, semantic retrieval, memory management, privacy       |
 | [Troubleshooting and FAQ](troubleshooting-and-faq.md)       | Common errors, provider-specific issues, performance, FAQ                       |
 
 ## Quick Start

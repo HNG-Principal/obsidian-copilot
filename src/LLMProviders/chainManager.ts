@@ -32,6 +32,9 @@ import ChatModelManager from "./chatModelManager";
 import MemoryManager from "./memoryManager";
 import PromptManager from "./promptManager";
 import { UserMemoryManager } from "@/memory/UserMemoryManager";
+import { LongTermMemoryManager } from "@/memory/LongTermMemoryManager";
+import { MemoryStore } from "@/memory/MemoryStore";
+import EmbeddingManager from "./embeddingManager";
 
 export default class ChainManager {
   // TODO: These chains are deprecated since we now use direct chat model calls in chain runners
@@ -49,6 +52,7 @@ export default class ChainManager {
   public memoryManager: MemoryManager;
   public promptManager: PromptManager;
   public userMemoryManager: UserMemoryManager;
+  public longTermMemoryManager: LongTermMemoryManager;
   private pendingModelError: Error | null = null;
 
   constructor(app: App) {
@@ -58,6 +62,16 @@ export default class ChainManager {
     this.chatModelManager = ChatModelManager.getInstance();
     this.promptManager = PromptManager.getInstance();
     this.userMemoryManager = new UserMemoryManager(app);
+
+    const memoryStore = new MemoryStore(getSettings().memoryFolderName);
+    const embeddingManager = EmbeddingManager.getInstance();
+    this.longTermMemoryManager = new LongTermMemoryManager(
+      memoryStore,
+      () => embeddingManager.getEmbeddingsAPI(),
+      (emb) => EmbeddingManager.getModelName(emb)
+    );
+
+    this.userMemoryManager.setLongTermMemoryManager(this.longTermMemoryManager);
 
     // Initialize async operations
     this.initialize();

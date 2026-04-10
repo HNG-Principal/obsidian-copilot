@@ -103,6 +103,17 @@ export abstract class BaseChainRunner implements ChainRunner {
 
       addMessage(messageToAdd);
 
+      // Fire-and-forget: extract long-term memories from conversation
+      this.chainManager.longTermMemoryManager
+        .extractAndStore(
+          [
+            userMessage,
+            { message: fullAIResponse, sender: AI_SENDER, isVisible: true, timestamp: null },
+          ],
+          this.chainManager.chatModelManager.getChatModel()
+        )
+        .catch((e) => logError("[LTM] Extraction failed:", e));
+
       // Clear the streaming message since it's now in chat history
       updateCurrentAiMessage("");
     } else if (abortController.signal.reason === ABORT_REASON.NEW_CHAT) {

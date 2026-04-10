@@ -238,6 +238,14 @@ export interface CopilotSettings {
   maxFileSizeMB: number;
   /** Folder where converted document markdown files are saved */
   convertedDocOutputFolder: string;
+  /** Enable automatic extraction & injection of long-term memories */
+  enableLongTermMemory: boolean;
+  /** Maximum number of long-term memories stored per vault (100-10000) */
+  maxLongTermMemories: number;
+  /** Maximum number of memories injected per AI turn (1-50) */
+  maxMemoriesRetrieved: number;
+  /** Cosine similarity threshold for deduplication (0.5-1.0) */
+  memoryDeduplicationThreshold: number;
 }
 
 export const settingsStore = createStore();

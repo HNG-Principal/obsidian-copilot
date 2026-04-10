@@ -19,6 +19,7 @@ import {
 import { CustomCommandChatModal } from "@/commands/CustomCommandChatModal";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { ApplyCustomCommandModal } from "@/components/modals/ApplyCustomCommandModal";
+import { MemoryManagerModal } from "@/components/memory/MemoryManagerModal";
 import { YoutubeTranscriptModal } from "@/components/modals/YoutubeTranscriptModal";
 import { checkIsPlusUser } from "@/plusUtils";
 // Debug modals removed with search v3
@@ -686,5 +687,16 @@ export function registerCommands(
       logError("Error undoing:", error);
       new Notice(`Undo failed: ${error.message}`);
     }
+  });
+
+  // Manage long-term memories
+  addCommand(plugin, COMMAND_IDS.MANAGE_LONG_TERM_MEMORIES, () => {
+    const chainManager = plugin.projectManager.getCurrentChainManager();
+    if (!chainManager.longTermMemoryManager) {
+      new Notice("Long-term memory is not initialized.");
+      return;
+    }
+    const modal = new MemoryManagerModal(plugin.app, chainManager.longTermMemoryManager);
+    modal.open();
   });
 }

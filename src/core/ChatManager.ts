@@ -468,6 +468,7 @@ export class ChatManager {
       }
 
       // Get system prompt for L1 layer (includes project context if in project mode)
+      this.chainManager.userMemoryManager?.setCurrentUserQuery(displayText);
       const { processedPrompt: systemPrompt, includedFiles: systemPromptIncludedFiles } =
         await this.getSystemPromptForMessage(chainType, this.plugin.app.vault, activeNote);
 
@@ -524,6 +525,7 @@ export class ChatManager {
 
       // Reprocess context for the edited message
       const activeNote = this.plugin.app.workspace.getActiveFile();
+      this.chainManager.userMemoryManager?.setCurrentUserQuery(newText);
       const { processedPrompt: systemPrompt, includedFiles: systemPromptIncludedFiles } =
         await this.getSystemPromptForMessage(chainType, this.plugin.app.vault, activeNote);
       await this.contextManager.reprocessMessageContext(
@@ -613,6 +615,7 @@ export class ChatManager {
         logInfo(`[ChatManager] Context envelope missing, reprocessing context for regeneration`);
         const chainType = getChainType();
         const activeNote = this.plugin.app.workspace.getActiveFile();
+        this.chainManager.userMemoryManager?.setCurrentUserQuery(userMessage.displayText);
         const { processedPrompt: systemPrompt, includedFiles: systemPromptIncludedFiles } =
           await this.getSystemPromptForMessage(chainType, this.plugin.app.vault, activeNote);
         await this.contextManager.reprocessMessageContext(

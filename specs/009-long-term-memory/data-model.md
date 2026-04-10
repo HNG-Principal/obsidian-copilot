@@ -1,7 +1,7 @@
 # Data Model: Long-Term Memory
 
 **Feature**: 009-long-term-memory  
-**Date**: 2026-04-08
+**Date**: 2026-04-09 (updated from 2026-04-08)
 
 ## Entities
 
@@ -9,18 +9,20 @@
 
 The core storage unit for a single extracted fact or insight.
 
-| Field         | Type             | Required | Description                                                            |
-| ------------- | ---------------- | -------- | ---------------------------------------------------------------------- |
-| `id`          | `string`         | Yes      | UUID v4, unique identifier                                             |
-| `content`     | `string`         | Yes      | The extracted fact/insight (1-3 sentences, bullet-point normalized)    |
-| `category`    | `MemoryCategory` | Yes      | Semantic label: `"preference"`, `"fact"`, `"instruction"`, `"context"` |
-| `projectTag`  | `string \| null` | No       | Project ID when memory was created; `null` for non-project chats       |
-| `embedding`   | `number[]`       | Yes      | Dense vector from configured embedding model                           |
-| `createdAt`   | `number`         | Yes      | Unix timestamp (ms) of first extraction                                |
-| `updatedAt`   | `number`         | Yes      | Unix timestamp (ms) of last update                                     |
-| `accessCount` | `number`         | Yes      | Count of times retrieved for prompt injection                          |
-| `sensitive`   | `boolean`        | Yes      | User-controlled sensitive flag; excluded from retrieval when `true`    |
-| `source`      | `MemorySource`   | Yes      | Provenance metadata                                                    |
+| Field            | Type             | Required | Description                                                            |
+| ---------------- | ---------------- | -------- | ---------------------------------------------------------------------- |
+| `id`             | `string`         | Yes      | UUID v4, unique identifier                                             |
+| `content`        | `string`         | Yes      | The extracted fact/insight (1-3 sentences, bullet-point normalized)    |
+| `category`       | `MemoryCategory` | Yes      | Semantic label: `"preference"`, `"fact"`, `"instruction"`, `"context"` |
+| `projectTag`     | `string \| null` | No       | Project ID when memory was created; `null` for non-project chats       |
+| `embedding`      | `number[]`       | No       | Stored in separate `embeddings.jsonl` file, not inline                 |
+| `createdAt`      | `number`         | Yes      | Unix timestamp (ms) of first extraction                                |
+| `updatedAt`      | `number`         | Yes      | Unix timestamp (ms) of last update                                     |
+| `lastAccessedAt` | `number`         | Yes      | Unix timestamp (ms) of last retrieval (for pruning score)              |
+| `accessCount`    | `number`         | Yes      | Count of times retrieved for prompt injection                          |
+| `sensitive`      | `boolean`        | Yes      | User-controlled sensitive flag; excluded from retrieval when `true`    |
+| `deleted`        | `boolean`        | Yes      | Tombstone for soft deletion; default `false`                           |
+| `source`         | `MemorySource`   | Yes      | Provenance metadata                                                    |
 
 ### MemorySource
 
@@ -54,16 +56,52 @@ Result of a semantic memory search, extending `Memory` with scoring.
 | `similarityScore` | `number` | Yes      | Cosine similarity to query (0.0-1.0) |
 | `rank`            | `number` | Yes      | 1-based position in result set       |
 
+### MemoryExtractionResult
+
+Result returned by the extraction parser for each extracted fact.
+
+| Field             | Type             | Required | Description                                   |
+| ----------------- | ---------------- | -------- | --------------------------------------------- |
+| `content`         | `string`         | Yes      | The extracted fact/insight text               |
+| `category`        | `MemoryCategory` | Yes      | Semantic label for the memory                 |
+| `isUpdate`        | `boolean`        | Yes      | Whether this updates an existing memory       |
+| `updatedMemoryId` | `string \| null` | No       | ID of existing memory to update (null if new) |
+
 ### MemoryStore (persistent structure)
 
-The on-disk JSON schema at `.copilot/long-term-memory.json`.
+Two JSONL files in `.copilot/memory/`:
 
-| Field            | Type       | Description                                                |
-| ---------------- | ---------- | ---------------------------------------------------------- |
-| `version`        | `number`   | Schema version for future migrations (starts at `1`)       |
-| `embeddingModel` | `string`   | Model ID used for embeddings; triggers re-embed if changed |
-| `memories`       | `Memory[]` | Array of all memory entries                                |
-| `lastUpdated`    | `number`   | Unix timestamp of last file write                          |
+**`memories.jsonl`** — one Memory record per line:
+
+```json
+{
+  "id": "a1b2c3d4",
+  "content": "User prefers TypeScript strict mode",
+  "category": "preference",
+  "projectTag": "proj-1",
+  "createdAt": 1712678400000,
+  "updatedAt": 1712678400000,
+  "lastAccessedAt": 1712678400000,
+  "accessCount": 3,
+  "sensitive": false,
+  "deleted": false,
+  "source": { "type": "auto", "conversationSnippet": "I always use strict..." }
+}
+```
+
+**`embeddings.jsonl`** — header line + one embedding per line:
+
+```json
+{"_type":"header","version":1,"model":"text-embedding-3-small","dimension":1536,"createdAt":1712678400000}
+{"memoryId":"a1b2c3d4","vector":[0.0123,-0.0456,...],"createdAt":1712678400000}
+```
+
+| Field            | Type     | Description                                      |
+| ---------------- | -------- | ------------------------------------------------ |
+| `version`        | `number` | Schema version in header (starts at `1`)         |
+| `embeddingModel` | `string` | Model ID in header; triggers re-embed if changed |
+| `memories`       | JSONL    | One JSON object per line in `memories.jsonl`     |
+| `embeddings`     | JSONL    | One JSON object per line in `embeddings.jsonl`   |
 
 ## Relationships
 
@@ -71,7 +109,7 @@ The on-disk JSON schema at `.copilot/long-term-memory.json`.
 Memory *──1 MemorySource      (each memory has one source)
 Memory *──1 MemoryCategory    (each memory has one category)
 Memory *──0..1 Project        (optional project tag, references ProjectConfig.id)
-MemoryStore 1──* Memory       (store contains all memories)
+Memory 1──0..1 Embedding      (1:1 in embeddings.jsonl, keyed by memoryId)
 MemoryRetrievalResult 1──1 Memory  (wraps a memory with score)
 ```
 
@@ -79,12 +117,13 @@ MemoryRetrievalResult 1──1 Memory  (wraps a memory with score)
 
 1. **Memory.content**: Non-empty string, max 500 characters. LLM extraction prompt enforces brevity.
 2. **Memory.id**: UUID v4 format. Generated at creation, immutable.
-3. **Memory.embedding**: Non-empty float array. Length must match configured embedding model's dimension.
+3. **Memory.embedding**: Stored in separate `embeddings.jsonl` keyed by `memoryId`. Length must match configured embedding model's dimension.
 4. **Memory.category**: Must be one of the 4 defined `MemoryCategory` values.
 5. **Memory.projectTag**: When non-null, must correspond to a valid `ProjectConfig.id` (soft reference — not enforced at storage level since projects can be deleted).
-6. **MemoryStore.version**: Must equal current schema version (`1`). If mismatch, run migration.
-7. **MemoryStore.embeddingModel**: If changed from current setting, all embeddings must be recomputed before retrieval.
+6. **MemoryStore header**: `model` field must match current `EmbeddingManager` model. If mismatch, queue re-embedding.
+7. **Max store size**: 5000 non-deleted memories per vault (configurable via `maxLongTermMemories`). When exceeded, prune oldest/lowest-relevance.
 8. **MemoryRetrievalResult.similarityScore**: Must be between 0.0 and 1.0 inclusive.
+9. **Deduplication threshold**: Cosine similarity ≥ 0.85 (configurable) triggers merge candidate check.
 
 ## State Transitions
 
@@ -95,15 +134,18 @@ MemoryRetrievalResult 1──1 Memory  (wraps a memory with score)
     │
     ├─→ [Active] → included in retrieval results
     │       │
-    │       ├─→ [Updated] → content/category modified (updatedAt refreshed)
+    │       ├─→ [Updated] → content/category modified (updatedAt refreshed, re-embedded)
     │       │       └─→ returns to [Active]
     │       │
     │       ├─→ [Sensitive] → user sets sensitive=true → excluded from retrieval
     │       │       └─→ [Active] if user clears flag
     │       │
-    │       └─→ [Deleted] → user deletes from management UI → removed from store
+    │       ├─→ [Deleted] → soft delete (deleted=true, tombstone)
+    │       │       └─→ [Removed] during compaction (hard delete)
+    │       │
+    │       └─→ [Pruned] → store exceeds 5000 limit, lowest pruneScore removed
     │
-    └─→ [Deduplicated] → merged into existing memory during extraction
+    └─→ [Deduplicated] → cosine similarity ≥ threshold → LLM-assisted merge
             └─→ existing memory [Updated], new entry discarded
 ```
 
@@ -121,11 +163,12 @@ MemoryRetrievalResult 1──1 Memory  (wraps a memory with score)
 
 ## Indexes & Access Patterns
 
-| Access Pattern              | Frequency                  | Method                                              |
-| --------------------------- | -------------------------- | --------------------------------------------------- |
-| Semantic retrieval by query | Every chat turn            | Cosine similarity over all non-sensitive embeddings |
-| Filter by project tag       | Every chat turn (optional) | Linear scan before similarity (small dataset)       |
-| Full list for UI            | On management modal open   | Load all from store                                 |
-| Single memory update        | On user edit in UI         | By `id` lookup                                      |
-| Batch dedup check           | On extraction              | LLM-assisted with full memory list as context       |
-| Count for limit enforcement | On extraction              | Array length check                                  |
+| Access Pattern              | Frequency                  | Method                                                        |
+| --------------------------- | -------------------------- | ------------------------------------------------------------- |
+| Semantic retrieval by query | Every chat turn            | Cosine similarity over all non-sensitive embeddings           |
+| Filter by project tag       | Every chat turn (optional) | Linear scan before similarity (small dataset)                 |
+| Full list for UI            | On management modal open   | Load all from store                                           |
+| Single memory update        | On user edit in UI         | By `id` lookup                                                |
+| Batch dedup check           | On extraction              | Cosine similarity (threshold 0.85) → LLM merge for candidates |
+| Pruning                     | On extraction (background) | Sort by pruneScore, remove top 10% when > 5000                |
+| Count for limit enforcement | On extraction              | Array length check                                            |

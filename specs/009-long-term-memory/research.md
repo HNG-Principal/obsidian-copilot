@@ -1,7 +1,7 @@
 # Research: Long-Term Memory
 
 **Feature**: 009-long-term-memory  
-**Date**: 2026-04-08  
+**Date**: 2026-04-09 (updated from 2026-04-08) (updated from 2026-04-08)  
 **Status**: Complete
 
 ## Research Tasks
@@ -66,43 +66,156 @@
 
 ### 4. Storage Format
 
-**Decision**: Single JSON file at `.copilot/long-term-memory.json` containing an array of memory entries with embedded vectors. Optional markdown export to `memoryFolderName/Long-Term Memories.md`.
+**Decision**: JSONL files in `.copilot/memory/` — `memories.jsonl` for memory records and `embeddings.jsonl` for embedding vectors (keyed by memory ID). Optional markdown export to `memoryFolderName/Long-Term Memories.md`.
 
-**Rationale**: Existing caching uses `.copilot/` directory for structured data (file cache, index snapshots). JSON supports efficient read/update/dedup operations. The spec clarification chose "structured data with optional markdown export."
+**Rationale**: JSONL is append-friendly and consistent with existing `.copilot/` index file patterns (per 2026-04-09 clarification). Separating embeddings from content allows re-embedding without touching memory records when the user changes embedding providers. At the 5000-memory scale, both files fit comfortably in memory for brute-force operations.
 
 **Alternatives considered**:
 
-- **JSONL (one entry per line)**: Considered for append-only writes, but memories require update/delete/dedup operations that benefit from loading the full set. With a target of ~100-1000 entries, a single JSON file is manageable.
-- **SQLite via sql.js**: Possible but adds a WASM dependency. Obsidian plugins should minimize bundle size (Constitution VII).
+- **Single JSON file**: Requires rewriting the entire file on every mutation. At 5000 memories with embeddings (~50 MB), this becomes expensive.
+- **SQLite via sql.js**: Adds a WASM dependency. Obsidian plugins should minimize bundle size (Constitution VII).
 - **Obsidian vault markdown files**: Rejected per clarification — structured format chosen.
 
 **Implementation approach**:
 
 - `MemoryStore` interface: `load()`, `save()`, `getAll()`, `upsert(memory)`, `delete(id)`, `exportMarkdown()`
-- File I/O via Obsidian's `app.vault` for vault-relative paths or `FileSystemAdapter` for `.copilot/` access
-- Atomic writes (write to temp file → rename) to prevent corruption
-- Embeddings stored inline per memory entry to avoid separate embedding cache
+- Memory records: one JSON object per line in `memories.jsonl` (content, metadata, timestamps, category, sensitive flag)
+- Embedding vectors: one JSON object per line in `embeddings.jsonl` (memory ID, model identifier, float array)
+- File I/O via Obsidian's `app.vault.adapter.read()` / `app.vault.adapter.write()` for `.copilot/` access
+- Deletion uses tombstone markers during normal operation; compact periodically
+- On embedding provider change: detect model mismatch, queue background re-embeddingte()`for`.copilot/` access
+- Deletion uses tombstone markers during normal operation; compact periodically
+- On embedding provider change: detect model mismatch, queue background re-embedding
 
-### 5. Deduplication Strategy
+### 5. DedupliTwo-stage deduplication — embedding cosine similarity as the first pass (configurable threshold, default 0.85), followed by LLM-assisted merge for candidates above the threshold.
 
-**Decision**: LLM-assisted deduplication during extraction. The extraction prompt receives existing memories as context and is instructed to update rather than duplicate.
-
-**Rationale**: The existing `updateSavedMemoryFile()` method already implements this exact pattern — it passes current memories + new statement to the LLM with instructions to "remove duplicates and near-duplicates by merging" and "keep most recent truth for conflicts." This proven approach is more robust than embedding-distance thresholds.
+**Rationale**: Per 2026-04-09 clarification, deduplication uses embedding cosine similarity with a configurable threshold. Pure embedding comparison is fast (O(n) vector ops) and catches the majority of duplicates without LLM cost. The LLM merge step runs only on candidates flagged by the similarity check, keeping costs proportional to actual duplicates rather than total memory count.
 
 **Alternatives considered**:
 
-- **Embedding cosine similarity threshold**: Simpler but produces false positives (similar topics ≠ duplicate facts). A threshold of 0.9 misses paraphrased duplicates; 0.7 merges distinct facts.
+- **LLM-only dedup (previous research decision)**: Accurate but expensive — requires passing all existing memories to the LLM on every extraction. At 5000 memories this exceeds context limits.
 - **Exact string matching**: Too brittle — "uses React" vs "working with React" wouldn't match.
-- **Two-stage (embedding filter → LLM confirm)**: Over-engineered for v1. Can be added later if LLM dedup becomes a cost concern.
+- **Embedding-only without LLM merge**: Would silently overwrite old content. LLM merge preserves both old and new information.
 
-**Implementation approach**:
+**Deduplication flow**:
 
-- Extraction prompt includes `<existing_memories>` section with current memory content
-- LLM returns `isUpdate: true, updatedMemoryId: "..."` when a memory should be updated
-- Pure function `deduplicateMemories(existing, extracted)` applies the LLM's merge decisions
-- Fallback: if LLM doesn't flag a duplicate, a lightweight post-check compares new entry against existing by category + embedding similarity > 0.95
+1. After extraction produces candidate memories, embed each candidate
+2. For each candidate, compute cosine similarity against all existing memory embeddings
+3. If max similarity ≥ threshold (0.85) → pass old + new content to LLM for intelligent merge
+4. If max similarity < threshold → store as new memory
+5. LLM merge prompt: "Combine these two facts into a single, accurate statement. Keep the most recent information. Preserve all distinct details."
 
-### 6. Sensitive Pattern Filtering
+**Performance**: At 5000 memories × 1536-dim vectors, brute-force cosine similarity takes ~5ms. LLM merge runs only on actual duplicate candidates (typically 0-3 per extraction batch). 3. If max similarity ≥ threshold (0.85) → pass old + new content to LLM for intelligent merge 4. If matore Size Limits and Pruning
+
+**Decision**: 5000 memories max per vault (configurable). When exceeded, prune oldest memories with lowest relevance scores.
+
+**Rationale**: Per 2026-04-09 clarification, the store has a configurable cap. At 5000 memories with 1536-dim embeddings, the embedding file is ~30 MB — fits in memory for brute-force search. Beyond this, both file size and retrieval time become concerns.
+
+**Pruning algorithm**:
+
+1. Score each memory: `pruneScore = ageFactor × (1 - maxRelevanceSeen)`
+2. `ageFactor` = days since last accessed / 365 (capped at 1.0)
+3. When store exceeds max, sort by pruneScore descending and remove top 10%
+4. Pruning runs as a background task after extraction, not blocking the chat
+5. Track `lastAccessedAt` timestamp on each memory (updated on retrieval)
+
+**Alternatives considered**:
+
+- **No limit**: Memory and file size grow unbounded.
+- **Fixed FIFO**: Discards potentially valuable old memories.
+- **LRU only**: Doesn't account for memory quality.
+
+---
+
+### 7. Extraction Toggle
+
+**Decision**: Settings toggle `enableLongTermMemory` (default: `true`). When disabled, no extraction runs but existing memories remain retrievable.
+
+**Rationale**: Per 2026-04-09 clarification. Users need control over whether facts are extracted. Follows the existing `enableRecentConversations` / `enableSavedMemory` toggle pattern.
+
+**New settings fields**:
+
+- `enableLongTermMemory: boolean` (default `true`)
+- `maxLongTermMemories: number` (default `5000`)
+- `maxMemoriesRetrieved: number` (default `10`)
+- `memoryDeduplicationThreshold: number` (default `0.85`)
+
+---
+
+### 8. Embedding Provider Reuse
+
+**Decision**: Reuse `EmbeddingManager.getInstance().getEmbeddingsAPI()` — same provider as vault search.
+
+**Rationale**: Per 2026-04-09 clarification. No separate embedding configuration needed. The existing EmbeddingManager handles provider selection, API keys, rate limiting, and error handling.
+
+**Re-embedding on provider change**:
+
+- Store the embedding model identifier in `embeddings.jsonl` header line
+- On load, compare stored model with current EmbeddingManager model
+- If mismatch, queue background re-embedding (non-blocking)
+- Show notice: "Memory embeddings are being updated for the new embedding provider"
+
+---
+
+### 9. Sx similarity < threshold → store as new memory
+
+5. LLM merge prompt: "Combine these two facts into a single, accurate statement. Keep the most recent information. Preserve all distinct details."
+
+**Performance**: At 5000 memories × 1536-dim vectors, brute-force cosine similarity takes ~5ms. LLM merge runs only on actual duplicate candidates (typically 0-3 per extraction batch).
+
+### 6. Store Size Limits and Pruning
+
+**Decision**: 5000 memories max per vault (configurable). When exceeded, prune oldest memories with lowest relevance scores.
+
+**Rationale**: Per 2026-04-09 clarification, the store has a configurable cap. At 5000 memories with 1536-dim embeddings, the embedding file is ~30 MB — fits in memory for brute-force search. Beyond this, both file size and retrieval time become concerns.
+
+**Pruning algorithm**:
+
+1. Score each memory: `pruneScore = ageFactor × (1 - maxRelevanceSeen)`
+2. `ageFactor` = days since last accessed / 365 (capped at 1.0)
+3. When store exceeds max, sort by pruneScore descending and remove top 10%
+4. Pruning runs as a background task after extraction, not blocking the chat
+5. Track `lastAccessedAt` timestamp on each memory (updated on retrieval)
+
+**Alternatives considered**:
+
+- **No limit**: Memory and file size grow unbounded.
+- **Fixed FIFO**: Discards potentially valuable old memories.
+- **LRU only**: Doesn't account for memory quality.
+
+---
+
+### 7. Extraction Toggle
+
+**Decision**: Settings toggle `enableLongTermMemory` (default: `true`). When disabled, no extraction runs but existing memories remain retrievable.
+
+**Rationale**: Per 2026-04-09 clarification. Users need control over whether facts are extracted. Follows the existing `enableRecentConversations` / `enableSavedMemory` toggle pattern.
+
+**New settings fields**:
+
+- `enableLongTermMemory: boolean` (default `true`)
+- `maxLongTermMemories: number` (default `5000`)
+- `maxMemoriesRetrieved: number` (default `10`)
+- `memoryDeduplicationThreshold: number` (default `0.85`)
+
+---
+
+### 8. Embedding Provider Reuse
+
+**Decision**: Reuse `EmbeddingManager.getInstance().getEmbeddingsAPI()` — same provider as vault search.
+
+**Rationale**: Per 2026-04-09 clarification. No separate embedding configuration needed. The existing EmbeddingManager handles provider selection, API keys, rate limiting, and error handling.
+
+**Re-embedding on provider change**:
+
+- Store the embedding model identifier in `embeddings.jsonl` header line
+- On load, compare stored model with current EmbeddingManager model
+- If mismatch, queue background re-embedding (non-blocking)
+- Show notice: "Memory embeddings are being updated for the new embedding provider"
+
+---
+
+### 9. Sensitive Pattern Filtering
 
 **Decision**: Pre-extraction filter using configurable regex patterns for known sensitive content types (API keys, tokens, passwords, secrets). Plus a `sensitive` boolean flag per memory for user-controlled exclusion.
 

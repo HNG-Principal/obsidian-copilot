@@ -5,6 +5,7 @@ import { getSettings } from "@/settings/model";
 import { ensureFolderExists } from "@/utils";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { LongTermMemoryManager } from "@/memory/LongTermMemoryManager";
 
 /**
  * User Memory Management Class
@@ -16,9 +17,26 @@ export class UserMemoryManager {
   private recentConversationsContent: string = "";
   private savedMemoriesContent: string = "";
   private isUpdatingMemory: boolean = false;
+  private longTermMemoryManager: LongTermMemoryManager | null = null;
+  private currentUserQuery: string | null = null;
 
   constructor(app: App) {
     this.app = app;
+  }
+
+  /**
+   * Set the LongTermMemoryManager reference for retrieval injection.
+   */
+  setLongTermMemoryManager(manager: LongTermMemoryManager): void {
+    this.longTermMemoryManager = manager;
+  }
+
+  /**
+   * Set the current user query for LTM retrieval context.
+   * Should be called before each getUserMemoryPrompt() invocation.
+   */
+  setCurrentUserQuery(query: string): void {
+    this.currentUserQuery = query;
   }
 
   /**
@@ -144,6 +162,17 @@ export class UserMemoryManager {
 
         <saved_memories> are important memories that the user explicitly asked you to remember. 
         Use these memories to provide more personalized and contextually relevant responses.`;
+      }
+
+      // Add long-term memories if available
+      if (this.longTermMemoryManager && this.currentUserQuery) {
+        const ltmSection = await this.longTermMemoryManager.getRelevantMemoriesPrompt(
+          this.currentUserQuery
+        );
+        if (ltmSection) {
+          memoryPrompt += `\n\n${ltmSection}\n\nThese are automatically extracted long-term memories from past conversations. Use them for context when relevant.`;
+        }
+        this.currentUserQuery = null; // Reset after use
       }
 
       return memoryPrompt.length > 0 ? memoryPrompt : null;
