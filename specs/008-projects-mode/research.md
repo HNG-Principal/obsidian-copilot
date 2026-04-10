@@ -6,26 +6,30 @@
 
 ## 1. Project Configuration Schema
 
-**Decision**: Extend the existing `ProjectConfig` in `CopilotSettings.projectList` with additional fields for templates, search scoping, and project-specific model overrides.
+**Decision**: Extend the existing `ProjectConfig` in `CopilotSettings.projectList` only where the approved feature requires new data. Add pinned files to `ProjectConfig` and persist the active project ID separately in settings.
 
-**Rationale**: The existing `ProjectConfig` already stores name, folders, and system prompt. Extending it with optional fields maintains backwards compatibility while enabling the new features specified in the spec.
+**Rationale**: The existing `ProjectConfig` already stores name, folder scoping, system prompt, and model overrides. The only missing project-level data required by the spec is pinned files. Persisting the active project ID separately allows startup restoration without expanding project config beyond the feature scope.
 
 **Alternatives Considered**:
 
 - **Separate project config file per project**: Rejected — fragmenting settings complicates backup/sync and settings migration.
 - **Project config in vault frontmatter**: Rejected — mixes project metadata with vault content. Plugin settings should stay in plugin settings.
-- **New `ProjectConfigV2` type with migration**: Considered — overkill for additive changes. Optional fields on existing type are sufficient.
+- **New `ProjectConfigV2` type with migration**: Considered — overkill for a single additive field. Optional fields on the existing type are sufficient.
+- **Templates and organizational tags**: Rejected for this feature — not present in the approved spec and not required to satisfy the user stories.
 
 **Implementation Approach**:
 
-- Extend `ProjectConfig` with optional fields:
-  - `modelOverride?: string` — use a different model for this project
-  - `temperatureOverride?: number` — project-specific temperature
-  - `searchScope?: 'project' | 'vault'` — restrict vector search to project folders
-  - `templateId?: string` — template this project was created from
-  - `tags?: string[]` — user-defined tags for organization
-- No migration needed — all new fields optional
-- Settings UI extended with these fields in project edit panel
+- Already-existing fields that support spec requirements:
+  - `projectModelKey` — per-project model selection
+  - `modelConfigs.temperature` — per-project temperature
+  - `contextSource.inclusions` / `contextSource.exclusions` — folder scoping
+  - `systemPrompt` — per-project system prompt
+  - `created` — creation timestamp
+  - `UsageTimestamps` — last usage timestamp
+- Extend `ProjectConfig` (in `src/aiParams.ts`) with optional field:
+  - `pinnedFiles?: string[]` — vault-relative files always included in project context
+- Persist `activeProjectId: string | null` in settings for startup restoration
+- No migration needed — both additions are optional or safely defaultable
 
 ---
 
@@ -44,11 +48,11 @@
 **Implementation Approach**:
 
 - **Messages**: Already isolated via `projectMessageRepos` Map in ChatManager ✅
-- **Context**: `ProjectContextCache` scopes context processing to project folders
-- **Search**: `VectorStoreManager` filters results by project folders when `searchScope === 'project'`
-- **Prompts**: Project's `systemPrompt` field injected via `getEffectiveUserPrompt()`
-- **Chat history**: `ChatPersistenceManager` already prefixes files with project ID ✅
-- **Chains**: `ProjectChainRunner`applies project-specific model/temperature overrides
+- **Context**: `ProjectContextCache` scopes context processing to project folders via `contextSource.inclusions/exclusions`
+- **Search**: `ProjectContextCache` handles project-scoped file discovery; `VectorStoreManager` remains vault-wide (no path filtering needed at that layer)
+- **Prompts**: Project's `systemPrompt` field injected via `ChatManager.injectProcessedUserCustomPromptIntoSystemPrompt()`
+- **Chat history**: `ChatPersistenceManager` already prefixes files with project ID (`{projectId}__`) ✅
+- **Chains**: `ProjectChainRunner` extends `CopilotPlusChainRunner`; model/temperature from `projectModelKey`/`modelConfigs` applied via `ProjectManager.switchProject()`
 
 ---
 
@@ -66,57 +70,57 @@
 
 **Implementation Approach**:
 
-- `ProjectManager.switchProject(projectId)`:
+- `ProjectManager.switchProject(project)`:
   1. Notify `ChatManager` to switch MessageRepository (instant)
   2. Notify `ChatUIState` to trigger re-render (instant)
-  3. Start async context refresh: `ProjectContextCache.refreshForProject(projectId)`
-  4. Show loading indicator on context status while refreshing
-  5. Use `ProjectLoadTracker` to coordinate loading states
+  3. Persist `activeProjectId` to settings
+  4. Start async context refresh: `ProjectContextCache.refreshForProject(project)`
+  5. Show loading indicator on context status while refreshing
+  6. Use `ProjectLoadTracker` to coordinate loading states
 - If user sends message before context is ready: use available cached context, note in UI
 
 ---
 
 ## 4. Project-Scoped Search
 
-**Decision**: Filter vector search results by project folder paths at query time, not at index time. The index remains vault-wide.
+**Decision**: Project-scoped search uses the existing `ProjectContextCache` approach: filter file discovery by `contextSource.inclusions/exclusions` patterns at the context layer. The vector index remains vault-wide.
 
-**Rationale**: A vault-wide index avoids rebuilding when projects change. Query-time filtering is efficient because the metadata already includes file paths. This matches how existing `VectorStoreManager` works with the `filterByPaths` approach.
+**Rationale**: The existing architecture already scopes context via `ProjectContextCache`, which reads `contextSource.inclusions/exclusions` patterns from `ProjectConfig`. Adding path filtering to `VectorStoreManager` would duplicate this responsibility and break the current architectural boundary where `ProjectContextCache` owns project scoping.
 
 **Alternatives Considered**:
 
+- **VectorStoreManager path filtering**: Rejected — duplicates scoping logic already in `ProjectContextCache`. Would require `VectorStoreManager` to know about projects, breaking its vault-level abstraction.
 - **Separate index per project**: Rejected — wastes storage, requires full reindex on project folder changes.
-- **Real-time index scoping**: Rejected — complex to maintain incremental indexes per project.
 - **No search scoping**: Rejected — spec requires project-scoped search.
 
 **Implementation Approach**:
 
-- `VectorStoreManager.search()` accepts optional `pathFilter: string[]`
-- When `project.searchScope === 'project'`: filter by project `includeFolders`
-- When `project.searchScope === 'vault'`: no filter (search everything)
-- Default: `'project'` — scope to project folders
-- Filter applied post-retrieval (after vector similarity) to avoid index changes
+- `ProjectContextCache.get(project)` already scopes markdown discovery to `contextSource.inclusions`
+- `contextSource.exclusions` already applied during file scanning
+- Harden edge cases: empty inclusions = full vault, renamed/deleted folders handled gracefully
+- Add `computeSearchPathFilter(inclusions: string, exclusions: string)` pure function for testable path matching logic
+- Default behavior: when `contextSource.inclusions` is empty, search entire vault (backward compatible)
 
 ---
 
-## 5. Project Templates
+## 5. Active Project Restoration on Startup
 
-**Decision**: Templates are predefined project configurations that users can use as starting points. Stored as `ProjectTemplate` objects in plugin settings.
+**Decision**: Persist the last active project ID in plugin settings and restore it during plugin startup if the project still exists.
 
-**Rationale**: Users creating multiple similar projects (e.g., "Research Project", "Writing Project") benefit from templates. Templates reduce setup friction and enforce consistent configuration.
+**Rationale**: The spec requires project configuration persistence across Obsidian restarts. Restoring the active project avoids forcing the user to manually reselect the same project on each launch and aligns with the switching workflow.
 
 **Alternatives Considered**:
 
-- **No templates**: Considered — but adds significant UX value with minimal code.
-- **Templates in vault files**: Rejected — complicates import/export and settings management.
-- **Community template marketplace**: Deferred to v2 — local templates only for v1.
+- **Always start in no-project mode**: Rejected — satisfies persistence only partially and creates unnecessary friction after restart.
+- **Store active project only in memory**: Rejected — cannot survive restarts.
+- **Restore full project object snapshot**: Rejected — duplicative with `projectList`; only the project ID must be persisted.
 
 **Implementation Approach**:
 
-- `ProjectTemplate`: `{ id, name, description, config: Partial<ProjectConfig> }`
-- Built-in templates: none (avoid hardcoding per Constitution I)
-- User can save any project as a template
-- Creating a project from template pre-fills the configuration
-- Templates stored in `CopilotSettings.projectTemplates`
+- Persist `activeProjectId: string | null` in settings whenever `switchProject()` or `clearProject()` runs
+- On plugin startup, `ProjectManager.restoreActiveProject()` reads `activeProjectId`
+- If the project exists, switch into it and kick off background context refresh
+- If the project no longer exists, clear the saved value and continue in no-project mode
 
 ---
 
@@ -137,5 +141,6 @@
 - Auto-save current project's chat on project switch
 - Load target project's chat history on switch
 - Clear chat history load guard: only load if MessageRepository is empty for that project
-- File naming: `{projectId}_{chatId}.md` (existing pattern)
+- File naming: `{projectId}__{chatId}.md` (existing pattern, double underscore prefix)
+- Frontmatter includes `projectId` and `projectName` metadata
 - On project deletion: offer to archive or delete associated chat history files

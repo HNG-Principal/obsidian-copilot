@@ -7,13 +7,17 @@ function ConfirmModalContent({
   content,
   onConfirm,
   onCancel,
+  onAlternate,
   confirmButtonText,
+  alternateButtonText,
   cancelButtonText,
 }: {
   content: string;
   onConfirm: () => void;
   onCancel: () => void;
+  onAlternate?: () => void;
   confirmButtonText: string;
+  alternateButtonText?: string;
   cancelButtonText: string;
 }) {
   return (
@@ -23,6 +27,11 @@ function ConfirmModalContent({
         {cancelButtonText && (
           <Button variant="secondary" onClick={onCancel}>
             {cancelButtonText}
+          </Button>
+        )}
+        {alternateButtonText && onAlternate && (
+          <Button variant="secondary" onClick={onAlternate}>
+            {alternateButtonText}
           </Button>
         )}
         {confirmButtonText && (
@@ -46,7 +55,9 @@ export class ConfirmModal extends Modal {
     title: string,
     private confirmButtonText: string = "Continue",
     private cancelButtonText: string = "Cancel",
-    private onCancel?: () => void
+    private onCancel?: () => void,
+    private alternateButtonText?: string,
+    private onAlternate?: () => void
   ) {
     super(app);
     // https://docs.obsidian.md/Reference/TypeScript+API/Modal/setTitle
@@ -68,12 +79,20 @@ export class ConfirmModal extends Modal {
       this.close();
     };
 
+    const handleAlternate = () => {
+      this.confirmed = true;
+      this.onAlternate?.();
+      this.close();
+    };
+
     this.root.render(
       <ConfirmModalContent
         content={this.content}
         onConfirm={handleConfirm}
         onCancel={handleCancel}
+        onAlternate={handleAlternate}
         confirmButtonText={this.confirmButtonText}
+        alternateButtonText={this.alternateButtonText}
         cancelButtonText={this.cancelButtonText}
       />
     );

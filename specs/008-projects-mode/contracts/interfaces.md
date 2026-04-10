@@ -8,77 +8,84 @@
 
 ### IProjectManager (Extended)
 
+Extends the existing `ProjectManager` singleton at `src/LLMProviders/projectManager.ts`.
+Current methods: `getCurrentProjectId()`, `switchProject(project)`, `getCurrentChainManager()`, `getProjectContext()`, `retryFailedItem()`.
+
 ```typescript
 interface IProjectManager {
   /**
    * Get the currently active project ID.
-   * Returns undefined when no project is active.
+   * EXISTING — returns string | null (not undefined).
    */
-  getCurrentProjectId(): string | undefined;
+  getCurrentProjectId(): string | null;
 
   /**
    * Switch to a different project.
-   * Saves current project's chat, loads target project's state.
+   * EXISTING — accepts ProjectConfig, not just projectId.
+   * ENHANCED — auto-saves current chat before switching.
    */
-  switchProject(projectId: string): Promise<void>;
+  switchProject(project: ProjectConfig): Promise<void>;
 
   /**
    * Switch to no-project mode (default context).
+   * NEW — exits project mode entirely.
    */
   clearProject(): Promise<void>;
 
   /**
    * Create a new project from configuration.
+   * NEW — generates ID, sets timestamps, persists to settings.
    */
-  createProject(config: ProjectConfig): Promise<ProjectConfig>;
-
-  /**
-   * Create a new project from a template.
-   */
-  createFromTemplate(
-    templateId: string,
-    overrides?: Partial<ProjectConfig>
-  ): Promise<ProjectConfig>;
+  createProject(config: Partial<ProjectConfig>): Promise<ProjectConfig>;
 
   /**
    * Update an existing project's configuration.
+   * NEW — validates, merges, persists. Triggers cache refresh if context changed.
    */
   updateProject(projectId: string, updates: Partial<ProjectConfig>): Promise<void>;
 
   /**
    * Delete a project. Optionally archives chat history.
+   * NEW — removes from settings, optionally cleans chat history files.
    */
   deleteProject(projectId: string, archiveHistory?: boolean): Promise<void>;
 
   /**
    * Get the runtime state of a project.
+   * NEW — returns loading/context readiness state.
    */
   getProjectState(projectId: string): ProjectState | undefined;
 
   /**
    * List all configured projects.
+   * NEW convenience method — currently done via getSettings().projectList.
    */
   listProjects(): ProjectConfig[];
+
+  /**
+   * Restore the last active project from persisted settings.
+   * NEW — used on plugin startup to rehydrate project mode after restart.
+   */
+  restoreActiveProject(): Promise<void>;
 }
 ```
 
 ### IProjectContextManager
 
+Maps to the existing `ProjectContextCache` at `src/cache/projectContextCache.ts`.
+Context scoping uses `contextSource.inclusions/exclusions` from `ProjectConfig`.
+
 ```typescript
 interface IProjectContextManager {
   /**
    * Refresh context cache for a specific project.
-   * Scans project folders and updates cached context.
+   * EXISTING — scans project folders per contextSource.inclusions and updates cached context.
    */
-  refreshForProject(projectId: string): Promise<void>;
-
-  /**
-   * Get path filters for project-scoped search.
-   */
-  getSearchPathFilter(projectId: string): string[] | undefined;
+  refreshForProject(project: ProjectConfig): Promise<void>;
 
   /**
    * Check if context is ready for a project.
+   * NEW — check if refresh is complete.
    */
   isContextReady(projectId: string): boolean;
 }
@@ -103,21 +110,12 @@ type ValidateProjectConfig = (config: Partial<ProjectConfig>) => string[];
 ```typescript
 /**
  * Convert project include/exclude folders into a search path filter.
- * Pure function: project config → array of allowed path prefixes.
+ * Pure function: normalize comma-separated project folder patterns into include/exclude arrays.
  */
-type ComputeSearchPathFilter = (includeFolders: string[], excludeFolders: string[]) => string[];
-```
-
-### Apply Template to Config
-
-```typescript
-/**
- * Merge a project template with user overrides to create a ProjectConfig.
- */
-type ApplyTemplate = (
-  template: ProjectTemplate,
-  overrides: Partial<ProjectConfig>
-) => ProjectConfig;
+type ComputeSearchPathFilter = (
+  inclusions: string,
+  exclusions: string
+) => { include: string[]; exclude: string[] };
 ```
 
 ---
@@ -126,23 +124,16 @@ type ApplyTemplate = (
 
 Extended settings in `CopilotSettings`:
 
-| Setting              | Type                   | Default     | Description                                              |
-| -------------------- | ---------------------- | ----------- | -------------------------------------------------------- |
-| `projectList`        | `ProjectConfig[]`      | `[]`        | **EXISTING** — list of project configurations (extended) |
-| `projectTemplates`   | `ProjectTemplate[]`    | `[]`        | **NEW** — saved project templates                        |
-| `defaultSearchScope` | `'project' \| 'vault'` | `'project'` | **NEW** — default search scope for new projects          |
+| Setting           | Type              | Default | Description                                              |
+| ----------------- | ----------------- | ------- | -------------------------------------------------------- |
+| `projectList`     | `ProjectConfig[]` | `[]`    | **EXISTING** — list of project configurations (extended) |
+| `activeProjectId` | `string \| null`  | `null`  | **NEW** — last active project restored on plugin load    |
 
 New optional fields on existing `ProjectConfig`:
 
-| Field                 | Type                    | Default      | Description           |
-| --------------------- | ----------------------- | ------------ | --------------------- |
-| `modelOverride`       | `string \| undefined`   | `undefined`  | Override LLM model    |
-| `temperatureOverride` | `number \| undefined`   | `undefined`  | Override temperature  |
-| `searchScope`         | `'project' \| 'vault'`  | `'project'`  | Search scope          |
-| `templateId`          | `string \| undefined`   | `undefined`  | Source template       |
-| `tags`                | `string[] \| undefined` | `undefined`  | Organizational tags   |
-| `createdAt`           | `number`                | `Date.now()` | Creation timestamp    |
-| `lastAccessedAt`      | `number`                | `Date.now()` | Last access timestamp |
+| Field         | Type                    | Default     | Description                                     |
+| ------------- | ----------------------- | ----------- | ----------------------------------------------- |
+| `pinnedFiles` | `string[] \| undefined` | `undefined` | Pinned project files always included in context |
 
 ---
 
@@ -153,7 +144,8 @@ New optional fields on existing `ProjectConfig`:
 | Project switched       | User selects a project      | `ProjectManager.switchProject()` → ChatManager switches repo → ChatPersistenceManager saves/loads → ProjectContextCache refreshes |
 | Project created        | User creates project        | `ProjectManager.createProject()` → settings updated → context initialized                                                         |
 | Project deleted        | User deletes project        | `ProjectManager.deleteProject()` → settings updated → chat history optionally archived                                            |
-| Project config updated | User changes settings       | `ProjectManager.updateProject()` → re-apply overrides (model, temp, search scope)                                                 |
+| Project config updated | User changes settings       | `ProjectManager.updateProject()` → re-apply overrides (model, temp, pinned files, folder scope)                                   |
 | Context ready          | Background refresh complete | `ProjectLoadTracker` notifies → UI updates loading indicator                                                                      |
 | Chat auto-saved        | Project switch or interval  | `ChatPersistenceManager.saveChat()` with project prefix                                                                           |
-| Search executed        | User or agent queries       | `VectorStoreManager.search()` applies project path filter                                                                         |
+| Plugin loaded          | Obsidian startup            | `ProjectManager.restoreActiveProject()` rehydrates active project or falls back to no-project mode                                |
+| Search executed        | User or agent queries       | `ProjectContextCache.get(project)` scopes files before the search context is assembled                                            |

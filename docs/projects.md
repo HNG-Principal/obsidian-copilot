@@ -4,11 +4,7 @@ Projects are focused AI workspaces. Each project has its own model, system promp
 
 Projects support **50+ file types** beyond markdown, including PDFs, Word documents, PowerPoint, Excel, images, and more — making them ideal for analyzing large or diverse document collections.
 
-> **Note**: Projects is an alpha feature. It may have rough edges and is subject to change.
-
----
-
-## Overview
+- **Pinned files** — Individual files you always want included, even if they sit outside the main folder filters
 
 In regular chat, all conversations share the same settings and model. Projects let you create dedicated workspaces with:
 
@@ -18,39 +14,50 @@ In regular chat, all conversations share the same settings and model. Projects l
 - **Isolated chat history** — Conversations in one project don't mix with conversations in another
 
 **Example use cases:**
+
 - A "Research" project that always has your research notes as context
 - A "Client Work" project with a specific system prompt and access to client-related notes
 - A "Learning" project with YouTube video URLs for study materials
+
+### Pinned Files
+
+Pinned files are always included in the project context, even if they are outside the project's inclusion patterns. This is useful for anchor documents such as briefs, specifications, or reference notes that should stay available in every conversation.
 
 ---
 
 ## Creating a Project
 
+If you quit and reopen Obsidian, Copilot restores the last active project automatically.
+
 1. Open the chat panel
 2. Click the mode selector at the top of the chat
 3. Select **Projects (alpha)**
 4. Click **New Project** (or the `+` button)
-5. Fill in the project details and save
 
----
+- **Delete**: Choose whether to remove only the project entry or remove the project entry and its saved chat files
 
 ## Project Configuration
 
 Each project has the following settings:
 
 ### Name
+
 A short name for the project. Appears in the project list.
 
 ### Description
+
 An optional description of what the project is for.
 
 ### Model
+
 Choose which AI model to use for this project. The available options depend on which models you have enabled.
 
 ### Model Settings
+
 Override the default temperature and max tokens specifically for this project.
 
 ### System Prompt
+
 Set a custom system prompt for this project. This replaces (or supplements) the global default. See [System Prompts](system-prompts.md) for details.
 
 ---

@@ -960,6 +960,7 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   /** @deprecated */
   inlineEditCommands: [],
   projectList: [],
+  activeProjectId: null,
   lastDismissedVersion: null,
   passMarkdownImages: true,
   enableAutonomousAgent: true,

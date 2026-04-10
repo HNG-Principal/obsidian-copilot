@@ -8,35 +8,29 @@
 
 ### ProjectConfig (Extended)
 
-The full configuration for a project. Extends the existing `ProjectConfig` type.
+The full configuration for a project. Extends the existing `ProjectConfig` type defined in `src/aiParams.ts`.
 
-| Field                 | Type                    | Description                                |
-| --------------------- | ----------------------- | ------------------------------------------ |
-| `id`                  | `string`                | Unique project ID                          |
-| `name`                | `string`                | Display name                               |
-| `description`         | `string \| undefined`   | Project description                        |
-| `includeFolders`      | `string[]`              | Vault folders scoped to this project       |
-| `excludeFolders`      | `string[]`              | Folders to exclude                         |
-| `systemPrompt`        | `string \| undefined`   | Project-specific system prompt             |
-| `modelOverride`       | `string \| undefined`   | LLM model override for this project        |
-| `temperatureOverride` | `number \| undefined`   | Temperature override                       |
-| `searchScope`         | `'project' \| 'vault'`  | Vector search scope (default: `'project'`) |
-| `templateId`          | `string \| undefined`   | Template this project was created from     |
-| `tags`                | `string[] \| undefined` | User-defined tags                          |
-| `createdAt`           | `number`                | Creation timestamp                         |
-| `lastAccessedAt`      | `number`                | Last access timestamp                      |
+**Existing fields** (already in codebase):
 
-### ProjectTemplate
+| Field             | Type                                                                                   | Description                        |
+| ----------------- | -------------------------------------------------------------------------------------- | ---------------------------------- |
+| `id`              | `string`                                                                               | Unique project ID                  |
+| `name`            | `string`                                                                               | Display name                       |
+| `description`     | `string \| undefined`                                                                  | Project description                |
+| `systemPrompt`    | `string`                                                                               | Project-specific system prompt     |
+| `projectModelKey` | `string`                                                                               | LLM model key for this project     |
+| `modelConfigs`    | `{ temperature?: number; maxTokens?: number }`                                         | Model parameter overrides          |
+| `contextSource`   | `{ inclusions?: string; exclusions?: string; webUrls?: string; youtubeUrls?: string }` | Folder scoping + web/YT context    |
+| `created`         | `number`                                                                               | Creation timestamp                 |
+| `UsageTimestamps` | `number`                                                                               | Last usage timestamp (for sorting) |
 
-A reusable project configuration template.
+**New fields** (added by this feature):
 
-| Field         | Type                     | Description                     |
-| ------------- | ------------------------ | ------------------------------- |
-| `id`          | `string`                 | Unique template ID              |
-| `name`        | `string`                 | Template name                   |
-| `description` | `string \| undefined`    | Template description            |
-| `config`      | `Partial<ProjectConfig>` | Pre-filled configuration fields |
-| `createdAt`   | `number`                 | Creation timestamp              |
+| Field         | Type                    | Description                                             |
+| ------------- | ----------------------- | ------------------------------------------------------- |
+| `pinnedFiles` | `string[] \| undefined` | Vault-relative files always included in project context |
+
+> **Note**: Folder scoping uses existing `contextSource.inclusions` / `contextSource.exclusions` (glob patterns). Per-project model is `projectModelKey`. Temperature is `modelConfigs.temperature`. No new fields are needed for these capabilities.
 
 ### ProjectState
 
@@ -50,16 +44,23 @@ Runtime state for an active project (not persisted).
 | `messageCount`   | `number`  | Messages in current session         |
 | `lastSwitchedAt` | `number`  | Last switch timestamp               |
 
+### PersistedProjectSelection
+
+The persisted project selection stored in plugin settings to restore the active project on startup.
+
+| Field             | Type             | Description                                   |
+| ----------------- | ---------------- | --------------------------------------------- |
+| `activeProjectId` | `string \| null` | Last active project to restore on plugin load |
+
 ---
 
 ## Relationships
 
 ```
-ProjectConfig    1──0..1 ProjectTemplate (project → template used)
 ProjectConfig    1──1   MessageRepository (project → isolated messages)
 ProjectConfig    1──1   ProjectContextCache entry (project → cached context)
 ProjectConfig    1──*   ChatHistoryFile (project → chat history files)
-ProjectTemplate  1──*   ProjectConfig (template → projects created from it)
+PersistedProjectSelection 0..1──1 ProjectConfig (activeProjectId → restored project)
 ```
 
 ---
@@ -68,12 +69,11 @@ ProjectTemplate  1──*   ProjectConfig (template → projects created from it
 
 1. **Project ID**: Non-empty string, unique across `projectList`
 2. **Project name**: Non-empty string
-3. **Include folders**: All paths must be valid vault paths
-4. **Exclude folders**: Must not completely negate include folders
-5. **Model override**: Must be a valid model identifier when specified
-6. **Temperature override**: Must be in range [0.0, 2.0] when specified
-7. **Search scope**: Must be `'project'` or `'vault'`
-8. **Template ID**: Must reference an existing template if specified
+3. **contextSource.inclusions**: Comma-separated glob patterns for valid vault paths
+4. **contextSource.exclusions**: Must not completely negate inclusions
+5. **projectModelKey**: Must be a valid model key when specified
+6. **modelConfigs.temperature**: Must be in range [0.0, 2.0] when specified
+7. **pinnedFiles**: Must be vault-relative paths when specified; duplicates should be removed during normalization
 
 ---
 
@@ -100,17 +100,16 @@ Switch Initiated → UI Updated (instant) → Messages Loaded → Context Refres
 
 ## Access Patterns
 
-| Operation               | Frequency                       | Method                                         |
-| ----------------------- | ------------------------------- | ---------------------------------------------- |
-| List projects           | On project dropdown open        | `CopilotSettings.projectList`                  |
-| Switch project          | Per user selection              | `ProjectManager.switchProject()`               |
-| Get active project      | Per message send, context build | `ProjectManager.getCurrentProjectId()`         |
-| Refresh project context | Per project switch              | `ProjectContextCache.refreshForProject()`      |
-| Create project          | Per user action                 | `ProjectManager.createProject()`               |
-| Delete project          | Per user action                 | `ProjectManager.deleteProject()`               |
-| Update project config   | Per user settings change        | `ProjectManager.updateProject()`               |
-| Save as template        | Per user action                 | Settings: push to `projectTemplates`           |
-| Create from template    | Per user action                 | Pre-fill `ProjectConfig` from template         |
-| Scope search to project | Per search query                | `VectorStoreManager.search()` with path filter |
-| Load project messages   | Per switch                      | `ChatManager.getCurrentMessageRepo()`          |
-| Persist project chat    | Per switch/auto-save            | `ChatPersistenceManager.saveChat()`            |
+| Operation               | Frequency                       | Method                                    |
+| ----------------------- | ------------------------------- | ----------------------------------------- |
+| List projects           | On project dropdown open        | `CopilotSettings.projectList`             |
+| Switch project          | Per user selection              | `ProjectManager.switchProject()`          |
+| Get active project      | Per message send, context build | `ProjectManager.getCurrentProjectId()`    |
+| Refresh project context | Per project switch              | `ProjectContextCache.refreshForProject()` |
+| Create project          | Per user action                 | `ProjectManager.createProject()`          |
+| Delete project          | Per user action                 | `ProjectManager.deleteProject()`          |
+| Update project config   | Per user settings change        | `ProjectManager.updateProject()`          |
+| Restore active project  | On plugin load                  | `ProjectManager.restoreActiveProject()`   |
+| Scope search to project | Per search query                | `ProjectContextCache.get(project)`        |
+| Load project messages   | Per switch                      | `ChatManager.getCurrentMessageRepo()`     |
+| Persist project chat    | Per switch/auto-save            | `ChatPersistenceManager.saveChat()`       |

@@ -97,8 +97,17 @@ export interface ProjectConfig {
     webUrls?: string;
     youtubeUrls?: string;
   };
+  pinnedFiles?: string[];
   created: number;
   UsageTimestamps: number;
+}
+
+export interface ProjectState {
+  projectId: string;
+  isLoading: boolean;
+  isContextReady: boolean;
+  messageCount: number;
+  lastSwitchedAt: number | null;
 }
 
 export interface ModelConfig {

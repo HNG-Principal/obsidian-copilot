@@ -5,7 +5,7 @@
 
 ## Summary
 
-Project-scoped chat and context system that allows users to define named projects with specific vault folders, custom system prompts, and isolated conversation histories. Extends the existing `ProjectManager` singleton, `ProjectChainRunner`, `ProjectContextCache`, and project UI components. Adds project templates, project-aware search scoping, and improved project switching with automatic context refresh.
+Project-scoped chat and context system that allows users to define named projects with specific vault folders, custom system prompts, pinned context files, and isolated conversation histories. Extends the existing `ProjectManager` singleton, `ProjectChainRunner`, `ProjectContextCache`, and project UI components. Adds project-aware search scoping, improved project switching with automatic context refresh, and restoration of the active project on plugin startup.
 
 ## Technical Context
 
@@ -15,22 +15,22 @@ Project-scoped chat and context system that allows users to define named project
 **Testing**: Jest + unit tests adjacent to implementation
 **Target Platform**: Obsidian desktop plugin (Electron)
 **Project Type**: Obsidian plugin (single-bundle, esbuild)
-**Performance Goals**: Project switch <2s (SC-001), context refresh <3s (SC-002)
-**Constraints**: Backwards compatible with existing project system, project isolation must extend to all context sources (search, files, prompts, tools)
+**Performance Goals**: Project switch <1s (SC-001); scoped search returns zero results from non-scoped folders (SC-002); background context refresh target <3s
+**Constraints**: Backwards compatible with existing project system, project isolation must extend to the in-scope context sources for this feature (search, files, prompts)
 **Scale/Scope**: ~8 modified files, extends existing project infrastructure
 
 ## Constitution Check
 
-| Principle                          | Status   | Notes                                                                                                                                                           |
-| ---------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| I. Generalizable Solutions         | **PASS** | Projects are user-defined with arbitrary folder paths, names, and prompts. No hardcoded project templates or folder structures.                                 |
-| II. Clean Architecture             | **PASS** | `ProjectManager` (lifecycle) → `ProjectChainRunner` (LLM config) → `ProjectContextCache` (indexed context) → `ChatManager` (isolated messages). Clean layering. |
-| III. Prompt Integrity              | **PASS** | No existing prompts modified. Project system prompts are user-authored and injected via existing `getEffectiveUserPrompt()`.                                    |
-| IV. Type Safety                    | **PASS** | `ProjectConfig` type covers all project properties. `ProjectManager` methods are fully typed.                                                                   |
-| V. Structured Logging              | **PASS** | All logging via `logInfo/logWarn/logError`.                                                                                                                     |
-| VI. Testable by Design             | **PASS** | Project config validation is pure. Path scoping is pure (project folders → search filter). Context refresh is orchestrated through mockable interfaces.         |
-| VII. Simplicity & Minimal Overhead | **PASS** | Extends existing `ProjectManager`, `ProjectChainRunner`. No new infrastructure — project isolation already partially implemented in ChatManager.                |
-| VIII. Documentation Discipline     | **PASS** | JSDoc on all new functions. Will update `docs/projects.md`.                                                                                                     |
+| Principle                          | Status   | Notes                                                                                                                                                     |
+| ---------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| I. Generalizable Solutions         | **PASS** | Projects are user-defined with arbitrary folder paths, names, prompts, and pinned files. No hardcoded folder structures or special-case project behavior. |
+| II. Clean Architecture             | **PASS** | `ProjectManager` (lifecycle) → `ChatManager` (isolated messages, prompt injection) → `ProjectContextCache` (indexed context). Clean layering.             |
+| III. Prompt Integrity              | **PASS** | No existing prompts modified. Project system prompts are user-authored and injected via `ChatManager.injectProcessedUserCustomPromptIntoSystemPrompt()`.  |
+| IV. Type Safety                    | **PASS** | `ProjectConfig` type covers all project properties. `ProjectManager` methods are fully typed.                                                             |
+| V. Structured Logging              | **PASS** | All logging via `logInfo/logWarn/logError`.                                                                                                               |
+| VI. Testable by Design             | **PASS** | Project config validation is pure. Path scoping is pure (project folders → search filter). Context refresh is orchestrated through mockable interfaces.   |
+| VII. Simplicity & Minimal Overhead | **PASS** | Extends existing `ProjectManager`, `ProjectChainRunner`. No new infrastructure — project isolation already partially implemented in ChatManager.          |
+| VIII. Documentation Discipline     | **PASS** | JSDoc on all new functions. Will update `docs/projects.md`.                                                                                               |
 
 **Gate result: PASS — all principles confirmed.**
 
@@ -52,26 +52,31 @@ specs/008-projects-mode/
 
 ```text
 src/
+├── aiParams.ts                                    # MODIFIED — ProjectConfig pinned files extension, ProjectState type
 ├── core/
-│   ├── ChatManager.ts                     # MODIFIED — project-aware message repo switching
-│   └── ChatPersistenceManager.ts          # MODIFIED — project-prefixed chat history files
+│   ├── ChatManager.ts                             # MODIFIED — project-aware message repo switching
+│   └── ChatPersistenceManager.ts                  # MODIFIED — project-prefixed chat history files
 ├── cache/
-│   └── projectContextCache.ts             # MODIFIED — scoped search and context caching
-├── services/
-│   └── ProjectManager.ts                  # MODIFIED — enhanced project lifecycle, templates
+│   └── projectContextCache.ts                     # MODIFIED — scoped search and context caching
 ├── LLMProviders/
-│   └── ProjectChainRunner.ts              # MODIFIED — project-scoped chain config
-├── search/
-│   └── VectorStoreManager.ts              # MODIFIED — project-scoped search filtering
+│   ├── projectManager.ts                          # MODIFIED — enhanced project lifecycle, restoration, validation wiring
+│   ├── projectValidation.ts                       # NEW — pure project validation and path-filter helpers
+│   └── chainRunner/
+│       └── ProjectChainRunner.ts                  # EXISTING — thin wrapper, may add model override logic
 ├── components/
-│   └── project/                           # MODIFIED — project UI (create, switch, settings)
+│   ├── chat-components/
+│   │   └── ProjectList.tsx                        # MODIFIED — project list UI, switching, sorting
+│   ├── modals/project/
+│   │   └── AddProjectModal.tsx                    # MODIFIED — project create/edit modal
+│   └── project/
+│       └── progress-card.tsx                      # EXISTING — context loading progress
 ├── settings/
-│   └── model.ts                           # MODIFIED — ProjectConfig schema, project templates
+│   └── model.ts                                   # MODIFIED — persisted active project setting
 └── state/
-    └── ChatUIState.ts                     # MODIFIED — project switch notification
+    └── ChatUIState.ts                             # MODIFIED — project switch notification
 ```
 
-**Structure Decision**: No new files needed — this feature extends the existing project infrastructure. `ProjectManager.ts` is the primary modification target. ChatManager's project isolation (MessageRepository per project) is already implemented and just needs hardening.
+**Structure Decision**: This feature primarily extends the existing project infrastructure. One small pure helper module for validation/path-filter logic is acceptable to keep leaf logic testable. `projectManager.ts` remains the primary orchestration target. ChatManager's project isolation (MessageRepository per project) is already implemented and just needs hardening. Project-scoped search is handled by `ProjectContextCache` using `contextSource.inclusions/exclusions` patterns, not by `VectorStoreManager` path filtering.
 
 ## Complexity Tracking
 
