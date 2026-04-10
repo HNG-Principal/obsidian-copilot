@@ -36,6 +36,7 @@ export class ProjectContextCache {
   private static instance: ProjectContextCache;
   private cacheDir: string = ".copilot/project-context-cache";
   private memoryCache: Map<string, ContextCache> = new Map();
+  private contextReadyMap: Map<string, boolean> = new Map();
   private vault: Vault;
   private fileCache: FileCache<string>;
   private static readonly DEBOUNCE_DELAY = 5000; // 5 seconds
@@ -71,6 +72,21 @@ export class ProjectContextCache {
 
     // Clean up project mutexes
     this.projectMutexMap.clear();
+    this.contextReadyMap.clear();
+  }
+
+  /**
+   * Get whether a project's context is fully ready for use.
+   */
+  public isContextReady(projectId: string): boolean {
+    return this.contextReadyMap.get(projectId) ?? false;
+  }
+
+  /**
+   * Update whether a project's context is fully ready for use.
+   */
+  public setContextReady(projectId: string, isReady: boolean): void {
+    this.contextReadyMap.set(projectId, isReady);
   }
 
   private initializeEventListeners() {
@@ -309,6 +325,7 @@ export class ProjectContextCache {
 
       // Clear memory cache
       this.memoryCache.clear();
+      this.contextReadyMap.clear();
 
       // Clear project context files
       if (await this.vault.adapter.exists(this.cacheDir)) {
@@ -369,6 +386,7 @@ export class ProjectContextCache {
       }
 
       this.memoryCache.delete(projectCacheKey);
+      this.contextReadyMap.delete(project.id);
       logInfo(
         `[clearForProject] Project ${project.name}: Removed from ProjectContextCache memory.`
       );

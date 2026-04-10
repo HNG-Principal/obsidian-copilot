@@ -176,6 +176,10 @@ export default class CopilotPlugin extends Plugin {
 
     // Tool initialization is now handled automatically in CopilotPlusChainRunner and AutonomousAgentChainRunner
 
+    this.app.workspace.onLayoutReady(() => {
+      void this.projectManager.restoreActiveProject();
+    });
+
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu: Menu) => {
         registerContextMenu(menu, this.app);

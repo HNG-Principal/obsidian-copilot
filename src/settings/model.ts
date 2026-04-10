@@ -125,6 +125,7 @@ export interface CopilotSettings {
   isPlusUser: boolean | undefined;
   inlineEditCommands: LegacyCommandSettings[] | undefined;
   projectList: Array<ProjectConfig>;
+  activeProjectId: string | null;
   passMarkdownImages: boolean;
   enableAutonomousAgent: boolean;
   enableCustomPromptTemplating: boolean;
@@ -824,6 +825,13 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
     sanitizedSettings.projectListSortStrategy === "manual"
   ) {
     sanitizedSettings.projectListSortStrategy = DEFAULT_SETTINGS.projectListSortStrategy;
+  }
+
+  if (
+    sanitizedSettings.activeProjectId !== null &&
+    typeof sanitizedSettings.activeProjectId !== "string"
+  ) {
+    sanitizedSettings.activeProjectId = DEFAULT_SETTINGS.activeProjectId;
   }
 
   const userSystemPromptsFolder = (settingsToSanitize.userSystemPromptsFolder || "").trim();

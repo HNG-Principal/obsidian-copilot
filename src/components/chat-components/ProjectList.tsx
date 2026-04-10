@@ -1,4 +1,4 @@
-import { ProjectConfig, setCurrentProject } from "@/aiParams";
+import { ProjectConfig, setCurrentProject, useCurrentProject, useProjectLoading } from "@/aiParams";
 import { AddProjectModal } from "@/components/modals/project/AddProjectModal";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
 import { Button } from "@/components/ui/button";
@@ -15,13 +15,14 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { SearchBar } from "@/components/ui/SearchBar";
 import { cn } from "@/lib/utils";
 import { logError } from "@/logger";
-import { updateSetting, useSettingsValue } from "@/settings/model";
+import { useSettingsValue } from "@/settings/model";
 import { RecentUsageManager, sortByStrategy } from "@/utils/recentUsageManager";
 import {
   ChevronDown,
   ChevronUp,
   Edit2,
   Folder,
+  Loader2,
   MessageSquare,
   Plus,
   Search,
@@ -64,15 +65,23 @@ function ProjectItem({
   loadContext,
   onEdit,
   onDelete,
+  isActive,
+  isLoading,
 }: {
   project: ProjectConfig;
   loadContext: (project: ProjectConfig) => void;
   onEdit: (project: ProjectConfig) => void;
-  onDelete: (project: ProjectConfig) => void;
+  onDelete: (project: ProjectConfig, archiveHistory: boolean) => void;
+  isActive: boolean;
+  isLoading: boolean;
 }) {
   return (
     <div
-      className="tw-group tw-flex tw-cursor-pointer tw-items-center tw-justify-between tw-gap-2 tw-rounded-lg tw-border tw-border-solid tw-border-border tw-p-3 tw-transition-all tw-duration-200 tw-bg-secondary/40 hover:tw-border-interactive-accent hover:tw-text-accent hover:tw-shadow-[0_2px_12px_rgba(0,0,0,0.1)] active:tw-scale-[0.98]"
+      className={cn(
+        "tw-group tw-flex tw-cursor-pointer tw-items-center tw-justify-between tw-gap-2 tw-rounded-lg tw-border tw-border-solid tw-border-border tw-p-3 tw-transition-all tw-duration-200 tw-bg-secondary/40 hover:tw-border-interactive-accent hover:tw-text-accent hover:tw-shadow-[0_2px_12px_rgba(0,0,0,0.1)] active:tw-scale-[0.98]",
+        isActive && "tw-border-interactive-accent tw-bg-accent/10",
+        isLoading && "tw-opacity-80"
+      )}
       onClick={() => loadContext(project)}
     >
       <div className="tw-flex tw-flex-1 tw-items-center tw-gap-2 tw-overflow-hidden">
@@ -80,12 +89,27 @@ function ProjectItem({
           <Folder className="tw-size-4" />
         </div>
         <div className="tw-flex tw-flex-1 tw-flex-col tw-gap-1.5 tw-overflow-hidden">
-          <span className="tw-w-full tw-truncate tw-text-[13px] tw-font-medium tw-text-normal">
-            {project.name}
-          </span>
+          <div className="tw-flex tw-items-center tw-gap-2 tw-overflow-hidden">
+            <span className="tw-w-full tw-truncate tw-text-[13px] tw-font-medium tw-text-normal">
+              {project.name}
+            </span>
+            {isActive && (
+              <span className="tw-shrink-0 tw-rounded-full tw-px-2 tw-py-0.5 tw-text-[10px] tw-font-medium tw-text-accent tw-bg-accent/10">
+                Active
+              </span>
+            )}
+            {isLoading && (
+              <Loader2 className="tw-size-3.5 tw-shrink-0 tw-animate-spin tw-text-accent" />
+            )}
+          </div>
           {project.description && (
             <span className="tw-w-full tw-truncate tw-text-[12px] tw-text-muted/80">
               {project.description}
+            </span>
+          )}
+          {project.pinnedFiles && project.pinnedFiles.length > 0 && (
+            <span className="tw-text-[11px] tw-text-muted/80">
+              {project.pinnedFiles.length} pinned file{project.pinnedFiles.length === 1 ? "" : "s"}
             </span>
           )}
         </div>
@@ -130,9 +154,13 @@ function ProjectItem({
                 e.stopPropagation();
                 const modal = new ConfirmModal(
                   app,
-                  () => onDelete(project),
-                  `Are you sure you want to delete project "${project.name}"?`,
-                  "Delete Project"
+                  () => onDelete(project, true),
+                  `Delete project "${project.name}".\n\nArchive chats keeps saved project conversations in your vault. Delete chats removes those saved conversations too.`,
+                  "Delete Project",
+                  "Archive Chats",
+                  undefined,
+                  "Delete Chats",
+                  () => onDelete(project, false)
                 );
                 modal.open();
               }}
@@ -177,8 +205,15 @@ export const ProjectList = memo(
     const [showChatInput, setShowChatInput] = useState(false);
     const [selectedProject, setSelectedProject] = useState<ProjectConfig | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
+    const [currentProject] = useCurrentProject();
+    const [projectLoading] = useProjectLoading();
     const chatInput = useChatInput();
     const settings = useSettingsValue();
+
+    useEffect(() => {
+      setSelectedProject(currentProject);
+      setShowChatInput(Boolean(currentProject));
+    }, [currentProject]);
 
     // Get the project usage manager for subscription
     const projectUsageTimestampsManager =
@@ -248,18 +283,17 @@ export const ProjectList = memo(
       modal.open();
     };
 
-    const handleDeleteProject = (project: ProjectConfig) => {
-      const currentProjects = projects || [];
-      const newProjectList = currentProjects.filter((p) => p.name !== project.name);
-
-      // If the deleted project is currently selected, close it
-      if (selectedProject?.name === project.name) {
+    const handleDeleteProject = async (project: ProjectConfig, archiveHistory: boolean) => {
+      if (selectedProject?.id === project.id) {
         enableOrDisableProject(false);
       }
 
-      // Update the project list in settings
-      updateSetting("projectList", newProjectList);
-      new Notice(`Project "${project.name}" deleted successfully`);
+      await plugin.projectManager.deleteProject(project.id, archiveHistory);
+      new Notice(
+        archiveHistory
+          ? `Project "${project.name}" deleted successfully`
+          : `Project "${project.name}" and its chats were deleted`
+      );
     };
 
     const enableOrDisableProject = (enable: boolean, project?: ProjectConfig) => {
@@ -269,6 +303,7 @@ export const ProjectList = memo(
         setIsOpen(true);
         showChatUI(false);
         setCurrentProject(null);
+        void plugin.projectManager.clearProject();
         return;
       } else {
         if (!project) {
@@ -433,6 +468,8 @@ export const ProjectList = memo(
                             loadContext={handleLoadContext}
                             onEdit={handleEditProject}
                             onDelete={handleDeleteProject}
+                            isActive={currentProject?.id === project.id}
+                            isLoading={currentProject?.id === project.id && projectLoading}
                           />
                         ))}
                       </div>

@@ -1,4 +1,5 @@
 import { ChainType } from "@/chainFactory";
+import { getProjectContextLoadState } from "@/aiParams";
 import { logInfo } from "@/logger";
 import { ChatManager } from "@/core/ChatManager";
 import { ChatMessage, MessageContext } from "@/types/message";
@@ -228,6 +229,13 @@ export class ChatUIState {
    */
   getDebugInfo() {
     return this.chatManager.getDebugInfo();
+  }
+
+  /**
+   * Get current project context loading state.
+   */
+  getProjectContextState() {
+    return getProjectContextLoadState();
   }
 
   /**

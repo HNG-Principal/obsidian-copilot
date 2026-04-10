@@ -3,6 +3,8 @@ import {
   getChainType,
   isProjectMode,
   ProjectConfig,
+  ProjectState,
+  setCurrentProject,
   setProjectLoading,
   subscribeToChainTypeChange,
   subscribeToModelKeyChange,
@@ -24,9 +26,11 @@ import { FileParserManager, saveConvertedDocOutput } from "@/tools/FileParserMan
 import { err2String } from "@/utils";
 import { isRateLimitError } from "@/utils/rateLimitUtils";
 import { RecentUsageManager } from "@/utils/recentUsageManager";
+import { listMarkdownFiles } from "@/utils/vaultAdapterUtils";
 import { App, Notice, TFile } from "obsidian";
 import { BrevilabsClient } from "./brevilabsClient";
 import ChainManager from "./chainManager";
+import { normalizePinnedFiles, validateProjectConfig } from "./projectValidation";
 import { ProjectLoadTracker } from "./projectLoadTracker";
 
 export default class ProjectManager {
@@ -39,6 +43,7 @@ export default class ProjectManager {
   private fileParserManager: FileParserManager;
   private loadTracker: ProjectLoadTracker;
   private readonly projectUsageTimestampsManager = new RecentUsageManager<string>();
+  private readonly projectStates = new Map<string, ProjectState>();
 
   private constructor(app: App, plugin: CopilotPlugin) {
     this.app = app;
@@ -143,6 +148,130 @@ export default class ProjectManager {
   }
 
   /**
+   * Create and persist a new project configuration.
+   */
+  public async createProject(project: ProjectConfig): Promise<ProjectConfig> {
+    const normalizedProject = this.normalizeProjectConfig(project);
+    this.ensureUniqueProjectName(normalizedProject.name, normalizedProject.id);
+    this.assertValidProject(normalizedProject);
+
+    updateSetting("projectList", [...this.listProjects(), normalizedProject]);
+    this.initializeProjectState(normalizedProject.id);
+    return normalizedProject;
+  }
+
+  /**
+   * Update an existing project configuration.
+   */
+  public async updateProject(projectId: string, updates: ProjectConfig): Promise<ProjectConfig> {
+    const existingProject = this.listProjects().find((project) => project.id === projectId);
+    if (!existingProject) {
+      throw new Error("Project not found.");
+    }
+
+    const normalizedProject = this.normalizeProjectConfig({
+      ...existingProject,
+      ...updates,
+      id: projectId,
+      modelConfigs: {
+        ...existingProject.modelConfigs,
+        ...updates.modelConfigs,
+      },
+      contextSource: {
+        ...existingProject.contextSource,
+        ...updates.contextSource,
+      },
+    });
+
+    this.ensureUniqueProjectName(normalizedProject.name, projectId);
+    this.assertValidProject(normalizedProject);
+
+    updateSetting(
+      "projectList",
+      this.listProjects().map((project) => (project.id === projectId ? normalizedProject : project))
+    );
+
+    if (this.currentProjectId === projectId) {
+      setCurrentProject(normalizedProject);
+    }
+
+    return normalizedProject;
+  }
+
+  /**
+   * Delete a project and optionally preserve its chat history.
+   */
+  public async deleteProject(projectId: string, archiveHistory: boolean = true): Promise<void> {
+    const project = this.listProjects().find((item) => item.id === projectId);
+    if (!project) {
+      throw new Error("Project not found.");
+    }
+
+    if (this.currentProjectId === projectId) {
+      await this.clearProject();
+      setCurrentProject(null);
+    }
+
+    updateSetting(
+      "projectList",
+      this.listProjects().filter((item) => item.id !== projectId)
+    );
+
+    if (!archiveHistory) {
+      await this.deleteProjectChatHistory(projectId);
+    }
+
+    await this.projectContextCache.clearForProject(project);
+    this.projectStates.delete(projectId);
+  }
+
+  /**
+   * Exit the current project and restore the default chat context.
+   */
+  public async clearProject(): Promise<void> {
+    await this.switchProject(null);
+    setCurrentProject(null);
+  }
+
+  /**
+   * Return all configured projects.
+   */
+  public listProjects(): ProjectConfig[] {
+    return getSettings().projectList || [];
+  }
+
+  /**
+   * Return current runtime state for a project.
+   */
+  public getProjectState(projectId: string): ProjectState {
+    const existingState = this.projectStates.get(projectId);
+    if (existingState) {
+      return existingState;
+    }
+
+    return this.initializeProjectState(projectId);
+  }
+
+  /**
+   * Restore the persisted active project, if any.
+   */
+  public async restoreActiveProject(): Promise<void> {
+    const { activeProjectId } = getSettings();
+    if (!activeProjectId) {
+      return;
+    }
+
+    const project = this.listProjects().find((item) => item.id === activeProjectId);
+    if (!project) {
+      updateSetting("activeProjectId", null);
+      return;
+    }
+
+    await this.switchProject(project);
+    setCurrentProject(project);
+  }
+
+  /**
    * Touch the project's usage timestamp in settings with throttled persistence.
    * Memory is always updated immediately (for UI sorting), but settings writes are throttled.
    */
@@ -187,6 +316,11 @@ export default class ProjectManager {
 
   public async switchProject(project: ProjectConfig | null): Promise<void> {
     try {
+      if (!project && this.currentProjectId === null) {
+        updateSetting("activeProjectId", null);
+        return;
+      }
+
       // Clear all project context loading states
       this.loadTracker.clearAllLoadStates();
       setProjectLoading(true);
@@ -198,6 +332,7 @@ export default class ProjectManager {
       if (!project) {
         await this.saveCurrentProjectMessage();
         this.currentProjectId = null; // ensure set currentProjectId
+        updateSetting("activeProjectId", null);
 
         await this.loadNextProjectMessage();
         this.refreshChatView();
@@ -207,11 +342,18 @@ export default class ProjectManager {
       // else
       const projectId = project.id;
       if (this.currentProjectId === projectId) {
+        updateSetting("activeProjectId", projectId);
         return;
       }
 
       await this.saveCurrentProjectMessage();
       this.currentProjectId = projectId; // ensure set currentProjectId
+      updateSetting("activeProjectId", projectId);
+      this.updateProjectState(projectId, {
+        isLoading: true,
+        isContextReady: false,
+        lastSwitchedAt: Date.now(),
+      });
 
       // Use sequential operations to ensure loading state is maintained
       // through the entire process
@@ -225,6 +367,12 @@ export default class ProjectManager {
         project
       );
       await this.loadProjectContext(project);
+      this.updateProjectState(projectId, {
+        isLoading: false,
+        isContextReady: this.projectContextCache.isContextReady(projectId),
+        messageCount: this.plugin.chatUIState?.getMessages().length || 0,
+        lastSwitchedAt: Date.now(),
+      });
 
       // fresh chat view
       this.refreshChatView();
@@ -235,6 +383,12 @@ export default class ProjectManager {
       logInfo(`Switched to project: ${project.name}`);
     } catch (error) {
       logError(`Failed to switch project: ${error}`);
+      if (project?.id) {
+        this.updateProjectState(project.id, {
+          isLoading: false,
+          isContextReady: false,
+        });
+      }
       throw error;
     } finally {
       setProjectLoading(false);
@@ -270,6 +424,11 @@ export default class ProjectManager {
         return null;
       }
       logInfo(`[loadProjectContext] Starting for project: ${project.name}`);
+      this.projectContextCache.setContextReady(project.id, false);
+      this.updateProjectState(project.id, {
+        isLoading: true,
+        isContextReady: false,
+      });
 
       const contextCache = await this.projectContextCache.getOrInitializeCache(project);
 
@@ -291,10 +450,20 @@ export default class ProjectManager {
 
       // After other contexts are processed, ensure all referenced non-markdown files are parsed and cached
       await this.processNonMarkdownFiles(project, projectAllFiles);
+      this.projectContextCache.setContextReady(project.id, true);
+      this.updateProjectState(project.id, {
+        isLoading: false,
+        isContextReady: true,
+      });
 
       logInfo(`[loadProjectContext] Completed for project: ${project.name}.`);
       return updatedContextCacheAfterSources;
     } catch (error) {
+      this.projectContextCache.setContextReady(project.id, false);
+      this.updateProjectState(project.id, {
+        isLoading: false,
+        isContextReady: false,
+      });
       logError(`[loadProjectContext] Failed for project ${project.name}:`, error);
       throw error;
     } finally {
@@ -455,6 +624,11 @@ export default class ProjectManager {
           contextParts.push(`## Other Files\n${fileContextsStrings.join("\n\n")}`);
         }
       }
+    }
+
+    const pinnedFilesSection = await this.buildPinnedFilesSection(project);
+    if (pinnedFilesSection) {
+      contextParts.push(pinnedFilesSection);
     }
 
     return `
@@ -806,7 +980,13 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
     project: ProjectConfig,
     projectAllFiles: TFile[]
   ): Promise<void> {
-    const nonMarkdownFiles = projectAllFiles.filter((file) => file.extension !== "md");
+    const nonMarkdownFiles = [
+      ...new Map(
+        [...projectAllFiles, ...this.getPinnedProjectFiles(project)]
+          .filter((file) => file.extension !== "md")
+          .map((file) => [file.path, file])
+      ).values(),
+    ];
 
     logInfo(
       `[loadProjectContext] Project ${project.name}: Checking for non-markdown processing: ${nonMarkdownFiles.length} files .`
@@ -1003,6 +1183,133 @@ modified: ${stat ? new Date(stat.mtime).toISOString() : "unknown"}`;
     return this.app.vault.getFiles().filter((file: TFile) => {
       return shouldIndexFile(file, inclusionPatterns, exclusionPatterns, true);
     });
+  }
+
+  /**
+   * Create a normalized project configuration with defaults for missing fields.
+   */
+  private normalizeProjectConfig(project: ProjectConfig): ProjectConfig {
+    const settings = getSettings();
+
+    return {
+      ...project,
+      name: project.name.trim(),
+      description: project.description?.trim() || "",
+      systemPrompt: project.systemPrompt || "",
+      projectModelKey: project.projectModelKey.trim(),
+      modelConfigs: {
+        temperature: project.modelConfigs?.temperature ?? settings.temperature,
+        maxTokens: project.modelConfigs?.maxTokens ?? settings.maxTokens,
+      },
+      contextSource: {
+        inclusions: project.contextSource?.inclusions || "",
+        exclusions: project.contextSource?.exclusions || "",
+        webUrls: project.contextSource?.webUrls || "",
+        youtubeUrls: project.contextSource?.youtubeUrls || "",
+      },
+      pinnedFiles: normalizePinnedFiles(project.pinnedFiles),
+      created: project.created || Date.now(),
+      UsageTimestamps: project.UsageTimestamps || Date.now(),
+    };
+  }
+
+  /**
+   * Validate a project configuration and throw a readable error if invalid.
+   */
+  private assertValidProject(project: ProjectConfig): void {
+    const errors = validateProjectConfig(project);
+    if (errors.length > 0) {
+      throw new Error(errors.join("\n"));
+    }
+  }
+
+  /**
+   * Enforce unique project names across the settings store.
+   */
+  private ensureUniqueProjectName(name: string, projectId: string): void {
+    const duplicateProject = this.listProjects().find(
+      (project) => project.name === name && project.id !== projectId
+    );
+
+    if (duplicateProject) {
+      throw new Error(`Project "${name}" already exists. Please choose a different name.`);
+    }
+  }
+
+  /**
+   * Initialize runtime state for a project.
+   */
+  private initializeProjectState(projectId: string): ProjectState {
+    const state: ProjectState = {
+      projectId,
+      isLoading: false,
+      isContextReady: this.projectContextCache.isContextReady(projectId),
+      messageCount: 0,
+      lastSwitchedAt: null,
+    };
+    this.projectStates.set(projectId, state);
+    return state;
+  }
+
+  /**
+   * Update runtime state for a project.
+   */
+  private updateProjectState(projectId: string, partial: Partial<ProjectState>): void {
+    const currentState =
+      this.projectStates.get(projectId) || this.initializeProjectState(projectId);
+    this.projectStates.set(projectId, {
+      ...currentState,
+      ...partial,
+    });
+  }
+
+  /**
+   * Resolve pinned project files that still exist in the vault.
+   */
+  private getPinnedProjectFiles(project: ProjectConfig): TFile[] {
+    return normalizePinnedFiles(project.pinnedFiles)
+      .map((filePath) => this.app.vault.getAbstractFileByPath(filePath))
+      .filter((file): file is TFile => file instanceof TFile);
+  }
+
+  /**
+   * Build the pinned-files project context section.
+   */
+  private async buildPinnedFilesSection(project: ProjectConfig): Promise<string> {
+    const pinnedFiles = this.getPinnedProjectFiles(project);
+    if (pinnedFiles.length === 0) {
+      return "";
+    }
+
+    const pinnedEntries = await Promise.all(
+      pinnedFiles.map(async (file) => {
+        const content =
+          file.extension === "md"
+            ? await this.app.vault.read(file)
+            : (await this.projectContextCache.getOrReuseFileContext(project, file.path)) ||
+              "[Content not available]";
+
+        return `[[${file.basename}]]\npath: ${file.path}\ntype: ${file.extension}\n\n${content}`;
+      })
+    );
+
+    return `## Pinned Files\n${pinnedEntries.join("\n\n")}`;
+  }
+
+  /**
+   * Delete chat history files associated with a project.
+   */
+  private async deleteProjectChatHistory(projectId: string): Promise<void> {
+    const chatFiles = await listMarkdownFiles(this.app, getSettings().defaultSaveFolder);
+    const projectFiles = chatFiles.filter((file) => file.basename.startsWith(`${projectId}__`));
+
+    await Promise.all(
+      projectFiles.map(async (file) => {
+        if (await this.app.vault.adapter.exists(file.path)) {
+          await this.app.vault.adapter.remove(file.path);
+        }
+      })
+    );
   }
 
   public onunload(): void {
