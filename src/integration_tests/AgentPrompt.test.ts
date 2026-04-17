@@ -49,18 +49,6 @@ jest.mock("obsidian", () => ({
   },
 }));
 
-// Mock the specific modal that's causing issues
-jest.mock("@/components/modals/CopilotPlusExpiredModal", () => ({
-  CopilotPlusExpiredModal: class CopilotPlusExpiredModal {
-    constructor() {
-      (this as any).open = jest.fn();
-      (this as any).close = jest.fn();
-      (this as any).onOpen = jest.fn();
-      (this as any).onClose = jest.fn();
-    }
-  },
-}));
-
 // Mock @orama/orama to avoid ES module issues
 jest.mock("@orama/orama", () => ({
   create: jest.fn(),

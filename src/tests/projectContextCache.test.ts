@@ -46,7 +46,6 @@ jest.mock("crypto-js", () => ({
 // Mock plusUtils
 jest.mock("@/plusUtils", () => ({
   useIsPlusUser: jest.fn(),
-  navigateToPlusPage: jest.fn(),
 }));
 
 // Mock FileCache
