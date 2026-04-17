@@ -1,8 +1,11 @@
 import ChatSingleMessage from "@/components/chat-components/ChatSingleMessage";
+import { LongTermMemoryStatus } from "@/components/chat-components/LongTermMemoryStatus";
 import { RelevantNotes } from "@/components/chat-components/RelevantNotes";
 import { SuggestedPrompts } from "@/components/chat-components/SuggestedPrompts";
+import { WelcomeHero } from "@/components/chat-components/WelcomeHero";
 import { USER_SENDER } from "@/constants";
 import { useChatScrolling } from "@/hooks/useChatScrolling";
+import { LongTermMemoryManager } from "@/memory/LongTermMemoryManager";
 import { useSettingsValue } from "@/settings/model";
 import { ChatMessage } from "@/types/message";
 import { App } from "obsidian";
@@ -21,6 +24,7 @@ interface ChatMessagesProps {
   onDelete: (messageIndex: number) => void;
   onReplaceChat: (prompt: string) => void;
   showHelperComponents: boolean;
+  longTermMemoryManager?: LongTermMemoryManager | null;
 }
 
 const ChatMessages = memo(
@@ -36,6 +40,7 @@ const ChatMessages = memo(
     onDelete,
     onReplaceChat,
     showHelperComponents = true,
+    longTermMemoryManager,
   }: ChatMessagesProps) => {
     const [loadingDots, setLoadingDots] = useState("");
 
@@ -60,9 +65,19 @@ const ChatMessages = memo(
 
     if (!chatHistory.filter((message) => message.isVisible).length && !currentAiMessage) {
       return (
-        <div className="tw-flex tw-size-full tw-flex-col tw-gap-2 tw-overflow-y-auto">
+        <div className="tw-flex tw-size-full tw-flex-col tw-gap-3 tw-overflow-y-auto">
           {showHelperComponents && settings.showRelevantNotes && (
             <RelevantNotes defaultOpen={true} key="relevant-notes-before-chat" />
+          )}
+          {showHelperComponents && settings.enableLongTermMemory && longTermMemoryManager && (
+            <LongTermMemoryStatus
+              manager={longTermMemoryManager}
+              defaultOpen={false}
+              key="ltm-status-before-chat"
+            />
+          )}
+          {showHelperComponents && (
+            <WelcomeHero onSendPrompt={onReplaceChat} hasLongTermMemory={!!longTermMemoryManager} />
           )}
           {showHelperComponents && settings.showSuggestedPrompts && (
             <SuggestedPrompts onClick={onReplaceChat} />

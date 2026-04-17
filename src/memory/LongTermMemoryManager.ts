@@ -249,8 +249,7 @@ export class LongTermMemoryManager {
       loadedEmbeddings.vectors.delete(id);
     }
 
-    const embeddingsAPI = await this.getEmbeddingsAPI();
-    const modelName = this.getModelName(embeddingsAPI);
+    const modelName = loadedEmbeddings.model || "unknown";
     await this.store.save(surviving, loadedEmbeddings.vectors, modelName);
 
     logInfo(
@@ -343,15 +342,15 @@ export class LongTermMemoryManager {
     target.updatedAt = Date.now();
 
     const loadedEmbeddings = await this.store.loadEmbeddings();
-    const embeddingsAPI = await this.getEmbeddingsAPI();
-    const modelName = this.getModelName(embeddingsAPI);
 
-    // Re-embed only if content changed
+    // Re-embed only if content changed (requires embedding API)
     if (contentChanged) {
+      const embeddingsAPI = await this.getEmbeddingsAPI();
       const newEmbedding = await embeddingsAPI.embedQuery(target.content);
       loadedEmbeddings.vectors.set(id, newEmbedding);
     }
 
+    const modelName = loadedEmbeddings.model || this.getModelName(await this.getEmbeddingsAPI());
     await this.store.save(memories, loadedEmbeddings.vectors, modelName);
   }
 
@@ -368,8 +367,7 @@ export class LongTermMemoryManager {
     const loadedEmbeddings = await this.store.loadEmbeddings();
     loadedEmbeddings.vectors.delete(id);
 
-    const embeddingsAPI = await this.getEmbeddingsAPI();
-    const modelName = this.getModelName(embeddingsAPI);
+    const modelName = loadedEmbeddings.model || "unknown";
     await this.store.save(filtered, loadedEmbeddings.vectors, modelName);
   }
 
