@@ -38,10 +38,19 @@ const components: Record<TabId, React.FC> = {
 };
 
 // tabs
+const TAB_LABELS: Record<TabId, string> = {
+  basic: "Basic",
+  model: "Model",
+  QA: "QA",
+  command: "Command",
+  plus: "Agent",
+  advanced: "Advanced",
+};
+
 const tabs: TabItemType[] = TAB_IDS.map((id) => ({
   id,
   icon: icons[id],
-  label: id.charAt(0).toUpperCase() + id.slice(1),
+  label: TAB_LABELS[id],
 }));
 
 const SettingsContent: React.FC = () => {

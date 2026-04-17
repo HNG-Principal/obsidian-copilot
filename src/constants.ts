@@ -133,13 +133,6 @@ export const LOADING_MESSAGES = {
   READING_FILE_TREE: "Reading file tree",
   COMPACTING: "Compacting",
 };
-export const PLUS_UTM_MEDIUMS = {
-  SETTINGS: "settings",
-  EXPIRED_MODAL: "expired_modal",
-  CHAT_MODE_SELECT: "chat_mode_select",
-  MODE_SELECT_TOOLTIP: "mode_select_tooltip",
-};
-export type PlusUtmMedium = (typeof PLUS_UTM_MEDIUMS)[keyof typeof PLUS_UTM_MEDIUMS];
 
 /**
  * Reasoning effort levels for OpenAI reasoning models
@@ -463,6 +456,7 @@ export enum EmbeddingModels {
   COPILOT_PLUS_MULTILINGUAL = "copilot-plus-multilingual",
   SILICONFLOW_QWEN3_EMBEDDING_0_6B = "Qwen/Qwen3-Embedding-0.6B",
   OPENROUTER_OPENAI_EMBEDDING_SMALL = "openai/text-embedding-3-small",
+  OLLAMA_QWEN3_EMBEDDING_8B = "qwen3-embedding:8b",
 }
 
 export const BUILTIN_EMBEDDING_MODELS: CustomModel[] = [
@@ -564,6 +558,15 @@ export const BUILTIN_EMBEDDING_MODELS: CustomModel[] = [
     isEmbeddingModel: true,
     core: true,
     baseUrl: "https://api.siliconflow.com/v1",
+  },
+  {
+    name: EmbeddingModels.OLLAMA_QWEN3_EMBEDDING_8B,
+    provider: EmbeddingModelProviders.OLLAMA,
+    enabled: true,
+    isBuiltIn: true,
+    isEmbeddingModel: true,
+    core: true,
+    baseUrl: "http://localhost:11434",
   },
 ];
 
@@ -892,7 +895,7 @@ export const RESTRICTION_MESSAGES = {
 
 export const DEFAULT_SETTINGS: CopilotSettings = {
   userId: uuidv4(),
-  isPlusUser: false,
+  isPlusUser: true,
   plusLicenseKey: "",
   openAIApiKey: "",
   openAIOrgId: "",
@@ -919,7 +922,7 @@ export const DEFAULT_SETTINGS: CopilotSettings = {
   defaultChainType: ChainType.LLM_CHAIN,
   defaultModelKey: ChatModels.OPENROUTER_GEMINI_2_5_FLASH + "|" + ChatModelProviders.OPENROUTERAI,
   embeddingModelKey:
-    EmbeddingModels.OPENROUTER_OPENAI_EMBEDDING_SMALL + "|" + EmbeddingModelProviders.OPENROUTERAI,
+    EmbeddingModels.OLLAMA_QWEN3_EMBEDDING_8B + "|" + EmbeddingModelProviders.OLLAMA,
   temperature: DEFAULT_MODEL_SETTING.TEMPERATURE,
   maxTokens: DEFAULT_MODEL_SETTING.MAX_TOKENS,
   contextTurns: 15,

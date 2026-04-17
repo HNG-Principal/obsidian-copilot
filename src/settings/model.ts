@@ -473,6 +473,22 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
         provider: m.provider === "azure_openai" ? EmbeddingModelProviders.AZURE_OPENAI : m.provider,
       };
     });
+    // Ensure the qwen3-embedding:8b built-in is present for vaults created before it was added.
+    const qwen3Key = "qwen3-embedding:8b|ollama";
+    const hasQwen3 = settingsToSanitize.activeEmbeddingModels.some(
+      (m) => `${m.name}|${m.provider}` === qwen3Key
+    );
+    if (!hasQwen3) {
+      const qwen3Builtin = BUILTIN_EMBEDDING_MODELS.find(
+        (m) => `${m.name}|${m.provider}` === qwen3Key
+      );
+      if (qwen3Builtin) {
+        settingsToSanitize.activeEmbeddingModels = [
+          ...settingsToSanitize.activeEmbeddingModels,
+          { ...qwen3Builtin, enabled: true },
+        ];
+      }
+    }
   }
 
   const sanitizedSettings: CopilotSettings = { ...settingsToSanitize };
@@ -849,6 +865,36 @@ export function sanitizeSettings(settings: CopilotSettings): CopilotSettings {
       : DEFAULT_SETTINGS.userSystemPromptsFolder;
 
   sanitizedSettings.qaExclusions = sanitizeQaExclusions(settingsToSanitize.qaExclusions);
+
+  // Ensure long-term memory settings have default values
+  if (typeof sanitizedSettings.enableLongTermMemory !== "boolean") {
+    sanitizedSettings.enableLongTermMemory = DEFAULT_SETTINGS.enableLongTermMemory;
+  }
+
+  const maxLongTermMemories = Number(settingsToSanitize.maxLongTermMemories);
+  if (isNaN(maxLongTermMemories) || maxLongTermMemories < 100 || maxLongTermMemories > 50000) {
+    sanitizedSettings.maxLongTermMemories = DEFAULT_SETTINGS.maxLongTermMemories;
+  } else {
+    sanitizedSettings.maxLongTermMemories = maxLongTermMemories;
+  }
+
+  const maxMemoriesRetrieved = Number(settingsToSanitize.maxMemoriesRetrieved);
+  if (isNaN(maxMemoriesRetrieved) || maxMemoriesRetrieved < 1 || maxMemoriesRetrieved > 50) {
+    sanitizedSettings.maxMemoriesRetrieved = DEFAULT_SETTINGS.maxMemoriesRetrieved;
+  } else {
+    sanitizedSettings.maxMemoriesRetrieved = maxMemoriesRetrieved;
+  }
+
+  const memoryDeduplicationThreshold = Number(settingsToSanitize.memoryDeduplicationThreshold);
+  if (
+    isNaN(memoryDeduplicationThreshold) ||
+    memoryDeduplicationThreshold < 0.5 ||
+    memoryDeduplicationThreshold > 1.0
+  ) {
+    sanitizedSettings.memoryDeduplicationThreshold = DEFAULT_SETTINGS.memoryDeduplicationThreshold;
+  } else {
+    sanitizedSettings.memoryDeduplicationThreshold = memoryDeduplicationThreshold;
+  }
 
   return sanitizedSettings;
 }

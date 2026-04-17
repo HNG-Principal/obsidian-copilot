@@ -4,12 +4,10 @@ import { HelpTooltip } from "@/components/ui/help-tooltip";
 import { Input } from "@/components/ui/input";
 import { getModelDisplayWithIcons } from "@/components/ui/model-display";
 import { SettingItem } from "@/components/ui/setting-item";
-import { DEFAULT_OPEN_AREA, PLUS_UTM_MEDIUMS, SEND_SHORTCUT } from "@/constants";
+import { DEFAULT_OPEN_AREA, SEND_SHORTCUT } from "@/constants";
 import { useTab } from "@/contexts/TabContext";
 import { cn } from "@/lib/utils";
-import { createPlusPageUrl } from "@/plusUtils";
 import { getModelKeyFromModel, updateSetting, useSettingsValue } from "@/settings/model";
-import { PlusSettings } from "@/settings/v2/components/PlusSettings";
 import { checkModelApiKey, formatDateTime } from "@/utils";
 import { isSortStrategy } from "@/utils/recentUsageManager";
 import { Key, Loader2 } from "lucide-react";
@@ -91,7 +89,36 @@ export const BasicSettings: React.FC = () => {
 
   return (
     <div className="tw-space-y-4">
-      <PlusSettings />
+      {/* Recommended Providers */}
+      <section className="tw-rounded-lg tw-border tw-border-border tw-bg-primary-alt tw-p-4">
+        <div className="tw-mb-2 tw-text-sm tw-font-semibold">Recommended providers</div>
+        <ul className="tw-list-disc tw-space-y-1 tw-pl-5 tw-text-xs tw-text-muted">
+          <li>
+            <strong>Ollama (local)</strong> &mdash; no API key. Model tab &rarr; Add Custom Model,
+            Provider: Ollama, Base URL <code>http://localhost:11434</code>, Model e.g.{" "}
+            <code>llama3.2</code> or <code>qwen2.5-coder</code>.
+          </li>
+          <li>
+            <strong>Ollama Cloud</strong> &mdash; Model tab &rarr; Add Custom Model, Provider: 3rd
+            party (openai-format), Base URL <code>https://ollama.com/v1</code>, Model e.g.{" "}
+            <code>gpt-oss:120b</code> or <code>qwen3-coder:480b</code>, API key from{" "}
+            <a
+              href="https://ollama.com/settings/keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="tw-text-accent hover:tw-text-accent-hover"
+            >
+              ollama.com/settings/keys
+            </a>
+            .
+          </li>
+          <li>
+            <strong>Z.ai</strong> &mdash; Add Custom Model, Provider: 3rd party (openai-format),
+            Base URL <code>https://api.z.ai/api/paas/v4</code>, Model e.g. <code>glm-4.6</code> or{" "}
+            <code>glm-4.5-air</code>, API key from your Z.ai dashboard.
+          </li>
+        </ul>
+      </section>
 
       {/* General Section */}
       <section>
@@ -190,25 +217,15 @@ export const BasicSettings: React.FC = () => {
                       <ul className="tw-pl-4 tw-text-sm tw-text-muted">
                         <li>
                           <strong>Chat:</strong> Regular chat mode for general conversations and
-                          tasks. <i>Free to use with your own API key.</i>
+                          tasks.
                         </li>
                         <li>
                           <strong>Vault QA (Basic):</strong> Ask questions about your vault content
-                          with semantic search. <i>Free to use with your own API key.</i>
+                          with semantic search.
                         </li>
                         <li>
-                          <strong>Copilot Plus:</strong> Covers all features of the 2 free modes,
-                          plus advanced paid features including chat context menu, advanced search,
-                          AI agents, and more. Check out{" "}
-                          <a
-                            href={createPlusPageUrl(PLUS_UTM_MEDIUMS.MODE_SELECT_TOOLTIP)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="tw-text-accent hover:tw-text-accent-hover"
-                          >
-                            obsidiancopilot.com
-                          </a>{" "}
-                          for more details.
+                          <strong>Agent:</strong> Full-featured mode with chat context menu,
+                          advanced search, AI agents, tools, and long-term memory.
                         </li>
                       </ul>
                     </div>

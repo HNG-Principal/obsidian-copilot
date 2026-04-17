@@ -1,17 +1,13 @@
-import { setChainType, setModelKey } from "@/aiParams";
-import { ChainType } from "@/chainFactory";
-import { CopilotPlusExpiredModal } from "@/components/modals/CopilotPlusExpiredModal";
 import {
   ChatModelProviders,
   ChatModels,
   DEFAULT_SETTINGS,
   EmbeddingModelProviders,
   EmbeddingModels,
-  PlusUtmMedium,
 } from "@/constants";
 import { BrevilabsClient } from "@/LLMProviders/brevilabsClient";
-import { logError, logInfo } from "@/logger";
-import { getSettings, setSettings, updateSetting, useSettingsValue } from "@/settings/model";
+import { logInfo } from "@/logger";
+import { getSettings, updateSetting, useSettingsValue } from "@/settings/model";
 import { Notice } from "obsidian";
 import React from "react";
 
@@ -90,61 +86,26 @@ export function isPlusModel(modelKey: string): boolean {
 }
 
 /**
- * Synchronous check if Plus features should be enabled.
- * Returns true when self-host mode is valid OR user has valid Plus subscription.
- * Use this for synchronous checks (e.g., model validation, UI state).
+ * Personal build: all Plus features permanently unlocked.
  */
 export function isPlusEnabled(): boolean {
-  const settings = getSettings();
-  // Self-host mode with valid plan validation bypasses Plus requirements
-  if (isSelfHostModeValid()) {
-    return true;
-  }
-  return settings.isPlusUser === true;
+  return true;
 }
 
 /**
- * Hook to get the isPlusUser setting.
- * Returns true when self-host mode is valid to allow offline usage.
+ * Personal build: always return true so all gated UI renders.
  */
 export function useIsPlusUser(): boolean | undefined {
-  const settings = useSettingsValue();
-  // Self-host mode with valid plan validation bypasses Plus requirements (requires license key)
-  if (
-    settings.plusLicenseKey &&
-    settings.enableSelfHostMode &&
-    settings.selfHostModeValidatedAt != null
-  ) {
-    // Permanently valid after 3 successful validations
-    if (settings.selfHostValidationCount >= SELF_HOST_PERMANENT_VALIDATION_COUNT) {
-      return true;
-    }
-    // Otherwise, check grace period
-    const isValid = Date.now() - settings.selfHostModeValidatedAt < SELF_HOST_GRACE_PERIOD_MS;
-    if (isValid) {
-      return true;
-    }
-  }
-  return settings.isPlusUser;
+  return true;
 }
 
 /**
- * Check if the user is a Plus user.
- * When self-host mode is valid, this returns true to allow offline usage.
+ * Personal build: skip license validation entirely.
  */
-export async function checkIsPlusUser(context?: Record<string, any>): Promise<boolean | undefined> {
-  // Self-host mode with valid plan validation bypasses license check
-  if (isSelfHostModeValid()) {
-    return true;
-  }
-
-  if (!getSettings().plusLicenseKey) {
-    turnOffPlus();
-    return false;
-  }
-  const brevilabsClient = BrevilabsClient.getInstance();
-  const result = await brevilabsClient.validateLicenseKey(context);
-  return result.isValid;
+export async function checkIsPlusUser(
+  _context?: Record<string, any>
+): Promise<boolean | undefined> {
+  return true;
 }
 
 /** Check if the user is on a plan that qualifies for self-host mode. */
@@ -330,70 +291,14 @@ export async function refreshSelfHostModeValidation(): Promise<void> {
   }
 }
 
-/**
- * Apply the Copilot Plus settings.
- * Includes clinical fix to ensure indexing is triggered when embedding model changes,
- * as the automatic detection doesn't work reliably in all scenarios.
- */
-export function applyPlusSettings(): void {
-  const defaultModelKey = DEFAULT_COPILOT_PLUS_CHAT_MODEL_KEY;
-  const embeddingModelKey = DEFAULT_COPILOT_PLUS_EMBEDDING_MODEL_KEY;
-  const previousEmbeddingModelKey = getSettings().embeddingModelKey;
-
-  logInfo("applyPlusSettings: Changing embedding model", {
-    from: previousEmbeddingModelKey,
-    to: embeddingModelKey,
-    changed: previousEmbeddingModelKey !== embeddingModelKey,
-  });
-
-  setModelKey(defaultModelKey);
-  setChainType(ChainType.COPILOT_PLUS_CHAIN);
-  setSettings({
-    defaultModelKey,
-    embeddingModelKey,
-    defaultChainType: ChainType.COPILOT_PLUS_CHAIN,
-  });
-
-  // Ensure indexing happens only once when embedding model changes
-  if (previousEmbeddingModelKey !== embeddingModelKey) {
-    logInfo("applyPlusSettings: Embedding model changed, triggering indexing");
-    import("@/search/vectorStoreManager")
-      .then(async (module) => {
-        await module.default.getInstance().indexVaultToVectorStore();
-      })
-      .catch((error) => {
-        logError("Failed to trigger indexing after Plus settings applied:", error);
-        new Notice(
-          "Failed to update Copilot index. Please try force reindexing from the command palette."
-        );
-      });
-  } else {
-    logInfo("applyPlusSettings: No embedding model change, skipping indexing");
-  }
-}
-
-export function createPlusPageUrl(medium: PlusUtmMedium): string {
-  return `https://www.obsidiancopilot.com?utm_source=obsidian&utm_medium=${medium}`;
-}
-
-export function navigateToPlusPage(medium: PlusUtmMedium): void {
-  window.open(createPlusPageUrl(medium), "_blank");
-}
-
 export function turnOnPlus(): void {
   updateSetting("isPlusUser", true);
 }
 
 /**
- * Turn off Plus user status.
- * IMPORTANT: This is called on every plugin start for users without a Plus license key (see checkIsPlusUser).
- * DO NOT reset model settings here - it will cause free users to lose their model selections on every app restart.
- * Only update the isPlusUser flag.
+ * No-op in this build: Plus is permanently unlocked.
+ * Kept only so legacy call sites (e.g. Brevilabs license expiry handler) don't throw.
  */
 export function turnOffPlus(): void {
-  const previousIsPlusUser = getSettings().isPlusUser;
-  updateSetting("isPlusUser", false);
-  if (previousIsPlusUser) {
-    new CopilotPlusExpiredModal(app).open();
-  }
+  logInfo("turnOffPlus called but Plus is permanently unlocked in this build; ignoring.");
 }

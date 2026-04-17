@@ -6,16 +6,15 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { SettingSwitch } from "@/components/ui/setting-switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PLUS_UTM_MEDIUMS } from "@/constants";
 import { logError } from "@/logger";
 import { shouldUseMiyo } from "@/miyo/miyoUtils";
-import { navigateToPlusPage, useIsPlusUser } from "@/plusUtils";
 import { updateSetting, useSettingsValue } from "@/settings/model";
 import { Docs4LLMParser } from "@/tools/FileParserManager";
 import { isRateLimitError } from "@/utils/rateLimitUtils";
 import { DropdownMenu, DropdownMenuTrigger } from "@radix-ui/react-dropdown-menu";
 import {
   AlertTriangle,
+  BookOpen,
   CheckCircle,
   ChevronDown,
   Download,
@@ -26,7 +25,6 @@ import {
   MoreHorizontal,
   RefreshCw,
   Sparkles,
-  SquareArrowOutUpRight,
 } from "lucide-react";
 import { Notice } from "obsidian";
 import React from "react";
@@ -36,6 +34,8 @@ import {
 } from "@/components/chat-components/ChatHistoryPopover";
 import { TokenCounter } from "./TokenCounter";
 import { ChatSettingsPopover } from "@/components/chat-components/ChatSettingsPopover";
+import ChainManager from "@/LLMProviders/chainManager";
+import { MemoryManagerModal } from "@/components/memory/MemoryManagerModal";
 
 export async function refreshVaultIndex() {
   try {
@@ -195,6 +195,7 @@ interface ChatControlsProps {
   onLoadChat: (id: string) => Promise<void>;
   onOpenSourceFile?: (id: string) => Promise<void>;
   latestTokenCount?: number | null;
+  chainManager?: ChainManager;
 }
 
 export function ChatControls({
@@ -209,10 +210,17 @@ export function ChatControls({
   onLoadChat,
   onOpenSourceFile,
   latestTokenCount,
+  chainManager,
 }: ChatControlsProps) {
   const settings = useSettingsValue();
   const [selectedChain, setSelectedChain] = useChainType();
-  const isPlusUser = useIsPlusUser();
+
+  const handleOpenMemoryManager = () => {
+    const ltm = chainManager?.longTermMemoryManager;
+    if (ltm) {
+      new MemoryManagerModal(app, ltm).open();
+    }
+  };
 
   const handleModeChange = async (chainType: ChainType) => {
     // If leaving project mode with autosave enabled, save chat BEFORE clearing project context
@@ -237,12 +245,12 @@ export function ChatControls({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost2" size="fit" className="tw-ml-1 tw-text-sm tw-text-muted">
-              {selectedChain === ChainType.LLM_CHAIN && "chat (free)"}
-              {selectedChain === ChainType.VAULT_QA_CHAIN && "vault QA (free)"}
+              {selectedChain === ChainType.LLM_CHAIN && "chat"}
+              {selectedChain === ChainType.VAULT_QA_CHAIN && "vault QA"}
               {selectedChain === ChainType.COPILOT_PLUS_CHAIN && (
                 <div className="tw-flex tw-items-center tw-gap-1">
                   <Sparkles className="tw-size-4" />
-                  copilot plus
+                  agent
                 </div>
               )}
               {selectedChain === ChainType.PROJECT_CHAIN && "projects (alpha)"}
@@ -255,59 +263,35 @@ export function ChatControls({
                 handleModeChange(ChainType.LLM_CHAIN);
               }}
             >
-              chat (free)
+              chat
             </DropdownMenuItem>
             <DropdownMenuItem
               onSelect={() => {
                 handleModeChange(ChainType.VAULT_QA_CHAIN);
               }}
             >
-              vault QA (free)
+              vault QA
             </DropdownMenuItem>
-            {isPlusUser ? (
-              <DropdownMenuItem
-                onSelect={() => {
-                  handleModeChange(ChainType.COPILOT_PLUS_CHAIN);
-                }}
-              >
-                <div className="tw-flex tw-items-center tw-gap-1">
-                  <Sparkles className="tw-size-4" />
-                  copilot plus
-                </div>
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem
-                onSelect={() => {
-                  navigateToPlusPage(PLUS_UTM_MEDIUMS.CHAT_MODE_SELECT);
-                  onCloseProject?.();
-                }}
-              >
-                copilot plus
-                <SquareArrowOutUpRight className="tw-size-3" />
-              </DropdownMenuItem>
-            )}
+            <DropdownMenuItem
+              onSelect={() => {
+                handleModeChange(ChainType.COPILOT_PLUS_CHAIN);
+              }}
+            >
+              <div className="tw-flex tw-items-center tw-gap-1">
+                <Sparkles className="tw-size-4" />
+                agent
+              </div>
+            </DropdownMenuItem>
 
-            {isPlusUser ? (
-              <DropdownMenuItem
-                className="tw-flex tw-items-center tw-gap-1"
-                onSelect={() => {
-                  handleModeChange(ChainType.PROJECT_CHAIN);
-                }}
-              >
-                <LibraryBig className="tw-size-4" />
-                projects (alpha)
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem
-                onSelect={() => {
-                  navigateToPlusPage(PLUS_UTM_MEDIUMS.CHAT_MODE_SELECT);
-                  onCloseProject?.();
-                }}
-              >
-                copilot plus
-                <SquareArrowOutUpRight className="tw-size-3" />
-              </DropdownMenuItem>
-            )}
+            <DropdownMenuItem
+              className="tw-flex tw-items-center tw-gap-1"
+              onSelect={() => {
+                handleModeChange(ChainType.PROJECT_CHAIN);
+              }}
+            >
+              <LibraryBig className="tw-size-4" />
+              projects (alpha)
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -350,6 +334,23 @@ export function ChatControls({
           </ChatHistoryPopover>
           <TooltipContent>Chat History</TooltipContent>
         </Tooltip>
+
+        {/* Memory Manager button */}
+        {settings.enableLongTermMemory && chainManager?.longTermMemoryManager && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost2"
+                size="icon"
+                title="Long-Term Memories"
+                onClick={handleOpenMemoryManager}
+              >
+                <BookOpen className="tw-size-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Long-Term Memories</TooltipContent>
+          </Tooltip>
+        )}
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -396,6 +397,19 @@ export function ChatControls({
                 Auto-accept Edits
               </div>
               <SettingSwitch checked={settings.autoAcceptEdits} />
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="tw-flex tw-justify-between"
+              onSelect={(e) => {
+                e.preventDefault();
+                updateSetting("enableLongTermMemory", !settings.enableLongTermMemory);
+              }}
+            >
+              <div className="tw-flex tw-items-center tw-gap-2">
+                <BookOpen className="tw-size-4" />
+                Long-Term Memory
+              </div>
+              <SettingSwitch checked={settings.enableLongTermMemory} />
             </DropdownMenuItem>
             {selectedChain === ChainType.PROJECT_CHAIN ? (
               <>
